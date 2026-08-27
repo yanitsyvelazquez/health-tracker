@@ -200,9 +200,9 @@ with tab_log:
                 st.toast("New entry saved to Cloud!", icon="🎉")
             
             df_upload = df_all.copy()
-            df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
+            df_upload['Date'] = pd.to_datetime(df_upload['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+            df_upload = df_upload.dropna(subset=['Date'])
             conn.update(worksheet="Data", data=df_upload)
-            st.rerun()
 
 # --- TAB: DASHBOARD ---
 with tab_dashboard:
