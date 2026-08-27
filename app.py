@@ -441,7 +441,8 @@ with tab_data:
             combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
             
             upload_df = combined_df.copy()
-            upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
+            combined_df['Date'] = pd.to_datetime(combined_df['Date'], errors='coerce')
+            combined_df = combined_df.dropna(subset=['Date'])
             conn.update(worksheet="Data", data=upload_df)
             
             st.success("Your old data was successfully merged into the cloud! Your streak is restored.")
@@ -461,7 +462,8 @@ with tab_data:
             
             df_all_others = df_all[df_all['Username'] != st.session_state.username]
             new_df_all = pd.concat([df_all_others, edited_df])
-            new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
+            new_df_all['Date'] = pd.to_datetime(new_df_all['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+            new_df_all = new_df_all.dropna(subset=['Date'])
             
             conn.update(worksheet="Data", data=new_df_all)
             st.success("Cloud database updated!")
