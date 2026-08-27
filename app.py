@@ -110,30 +110,107 @@ settings = load_settings(st.session_state.username)
 CALORIE_GOAL = settings["calorie_goal"]
 GOAL_WEIGHT = settings["goal_weight"]
 DARK_MODE = settings["dark_mode"]
-UNIT = settings["unit"]
+
+# --- STRICT UNIT FIX ---
+UNIT = str(settings.get("unit", "lb")).strip().lower()
+if UNIT == "nan" or UNIT == "none" or UNIT == "":
+    UNIT = "lb"
 
 # Math Conversions based on Unit
 CALS_PER_UNIT = 3500 if UNIT == "lb" else 7700
 PROTEIN_MULTIPLIER = 0.8 if UNIT == "lb" else 1.76
 
-# Apply Dark Mode CSS
+# --- UI COLOR & THEME INJECTION (BLUE PALETTE & ANIMATIONS) ---
 if DARK_MODE:
     st.markdown("""
         <style>
         .stApp { background-color: #121212; color: #FFFFFF; }
-        div[data-testid="metric-container"] { background-color: #1E1E1E !important; border-left: 6px solid #4DA6FF !important; }
-        .streak-box, .badge-box { background-color: #1E1E1E !important; color: #4DA6FF !important; border: 1px solid #4DA6FF; }
         h1, h2, h3, p, span { color: #E0E0E0 !important; }
+        
+        /* Metric Box Animation */
+        div[data-testid="stMetric"] { 
+            background: linear-gradient(145deg, #1E1E1E, #2A2A2A); 
+            padding: 15px !important; 
+            border-radius: 12px !important;
+            border-left: 6px solid #4DA6FF !important; 
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5) !important;
+            transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        div[data-testid="stMetric"]:hover {
+            transform: translateY(-5px) !important;
+            box-shadow: 0 8px 15px rgba(77, 166, 255, 0.15) !important;
+        }
+        
+        /* Streak Box Styling */
+        .streak-box { 
+            background: linear-gradient(145deg, #1E1E1E, #2A2A2A) !important; 
+            color: #4DA6FF !important; 
+            border: 1px solid #4DA6FF; 
+            padding: 15px; border-radius: 12px; text-align: center; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            transition: transform 0.2s ease;
+        }
+        .streak-box:hover { transform: translateY(-3px); }
+        
+        /* Custom Blue Tabs */
+        button[data-baseweb="tab"] { background-color: transparent !important; padding: 10px 20px !important; border-radius: 8px !important; margin-right: 5px !important; transition: all 0.3s ease !important; color: #A0A0A0 !important; }
+        button[data-baseweb="tab"]:hover { background-color: rgba(77, 166, 255, 0.15) !important; transform: translateY(-2px); color: #4DA6FF !important; }
+        button[data-baseweb="tab"][aria-selected="true"] { background-color: #4DA6FF !important; color: #121212 !important; font-weight: bold !important; box-shadow: 0 4px 6px rgba(77, 166, 255, 0.2) !important; }
+        div[data-baseweb="tab-highlight"] { display: none !important; }
+        
+        /* Inputs and Buttons */
+        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
+        button[kind="primary"] { background-color: #4DA6FF !important; color: #121212 !important; border-color: #4DA6FF !important; font-weight: bold; }
+        button[kind="primary"]:hover { background-color: #3388DD !important; border-color: #3388DD !important; }
+        
+        /* Radio Buttons (Overrides Red) */
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #4DA6FF !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_dark"
 else:
     st.markdown("""
         <style>
-        div[data-testid="metric-container"] { background-color: #F0F8FF; border-radius: 10px; border-left: 6px solid #00509E; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
-        .streak-box { background-color: #E6F2FF; padding: 15px; border-radius: 10px; text-align: center; color: #00509E; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
-        .badge-box { background-color: #00509E; color: white; padding: 15px; border-radius: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; margin-bottom: 20px; }
+        .stApp { background-color: #F8F9FA; }
         h1, h2, h3 { color: #00509E !important; font-family: 'Helvetica Neue', sans-serif;}
+        
+        /* Metric Box Animation */
+        div[data-testid="stMetric"] { 
+            background: linear-gradient(145deg, #ffffff, #F0F8FF);
+            padding: 15px !important; 
+            border-radius: 12px !important;
+            border-left: 6px solid #4DA6FF !important; 
+            box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08) !important;
+            transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+        }
+        div[data-testid="stMetric"]:hover {
+            transform: translateY(-5px) !important;
+            box-shadow: 0 8px 15px rgba(0, 80, 158, 0.15) !important;
+        }
+        
+        /* Streak Box Styling */
+        .streak-box { 
+            background: linear-gradient(145deg, #E6F2FF, #ffffff);
+            padding: 15px; border-radius: 12px; text-align: center; color: #00509E; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; 
+            box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08);
+            border: 1px solid #cce5ff;
+            transition: transform 0.2s ease;
+        }
+        .streak-box:hover { transform: translateY(-3px); }
+        
+        /* Custom Blue Tabs */
+        button[data-baseweb="tab"] { background-color: transparent !important; padding: 10px 20px !important; border-radius: 8px !important; margin-right: 5px !important; transition: all 0.3s ease !important; color: #555555 !important; font-weight: 600 !important; }
+        button[data-baseweb="tab"]:hover { background-color: rgba(0, 80, 158, 0.05) !important; transform: translateY(-2px); color: #00509E !important;}
+        button[data-baseweb="tab"][aria-selected="true"] { background-color: #00509E !important; color: white !important; box-shadow: 0 4px 6px rgba(0, 80, 158, 0.2) !important; }
+        div[data-baseweb="tab-highlight"] { display: none !important; }
+        
+        /* Inputs and Buttons */
+        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
+        button[kind="primary"] { background-color: #00509E !important; border-color: #00509E !important; }
+        button[kind="primary"]:hover { background-color: #4DA6FF !important; border-color: #4DA6FF !important; color: white !important;}
+        
+        /* Radio Buttons (Overrides Red) */
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #00509E !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
@@ -145,7 +222,6 @@ try:
     if 'Weight_lb' in df_all.columns:
         df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
         
-    # Ensure Timestamp column exists
     if 'Weight_Timestamp' not in df_all.columns:
         df_all['Weight_Timestamp'] = ""
     else:
@@ -177,21 +253,31 @@ with tab_log:
     st.header("Daily Tracking")
     log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition"])
     
-    # MORNING FORM
     with log_tab1:
         with st.form("morning_form", clear_on_submit=True):
             col_m1, col_m2 = st.columns(2)
             with col_m1:
                 entry_date_m = st.date_input("Date", value=date.today(), key="m_date")
                 weight_input = st.number_input(f"Weight ({UNIT})", min_value=0.0, format="%.1f")
+            
             with col_m2:
-                weigh_in_time = st.time_input("Time of Weigh-In", value="now")
+                st.write("Time of Weigh-In")
+                t_col1, t_col2, t_col3 = st.columns([1, 1, 1])
+                now = datetime.now()
+                
+                with t_col1:
+                    hr = st.selectbox("Hr", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1, label_visibility="collapsed")
+                with t_col2:
+                    mn = st.selectbox("Min", [f"{i:02d}" for i in range(0, 60)], index=int(now.strftime("%M")), label_visibility="collapsed")
+                with t_col3:
+                    ampm = st.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1, label_visibility="collapsed")
+                
+                time_str = f"{hr}:{mn} {ampm}"
             
             submit_morning = st.form_submit_button("Save Morning Weigh-In", use_container_width=True)
             
             if submit_morning:
                 entry_date_str = str(entry_date_m)
-                time_str = weigh_in_time.strftime("%I:%M %p")
                 
                 mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
                 if not df_all[mask].empty:
@@ -210,7 +296,6 @@ with tab_log:
                 conn.update(worksheet="Data", data=df_upload)
                 st.rerun()
 
-    # EVENING FORM
     with log_tab2:
         with st.form("evening_form", clear_on_submit=True):
             entry_date_e = st.date_input("Date", value=date.today(), key="e_date")
@@ -252,13 +337,14 @@ with tab_dashboard:
         df['7-Day Avg'] = df['Weight'].rolling(window=7, min_periods=1).mean()
         first_weight = df.iloc[0]['Weight']
         current_weight = df.iloc[-1]['Weight']
+        
+        prev_weight = df.iloc[-2]['Weight'] if len(df) > 1 else current_weight
+        weight_delta = current_weight - prev_weight
         total_lost = first_weight - current_weight
         
-        # Determine last weigh-in time if available
         last_time = df.iloc[-1].get('Weight_Timestamp', '')
         time_display = f" at {last_time}" if pd.notna(last_time) and str(last_time).strip() != "" else ""
         
-        # --- BULLETPROOF STREAK & FREEZES ---
         df_desc = df.sort_values(by='Date', ascending=False).reset_index(drop=True)
         streak = 0
         freezes_earned = len(df) // 7
@@ -289,23 +375,20 @@ with tab_dashboard:
                 st.write(f"**Great job this week!** You protected your streak ({streak} days).")
                 st.write(f"Total weight lost since you started: **{total_lost:.1f} {UNIT}**.")
 
-        # --- CORE METRICS ---
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", help=f"Last logged{time_display}")
+        col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", delta=f"{weight_delta:+.1f} {UNIT}" if weight_delta != 0 else None, delta_color="inverse", help=f"Last logged{time_display}")
         col2.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}")
         col3.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}")
         col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal")
         
-        # --- DYNAMIC REWARD TRACKER ---
         st.markdown("### 🎁 Next Reward Tracker")
-        
         if st.session_state.username.lower() == "yani":
             rewards = [
-                (181.9, "Video game", "-20 lb"), (176.9, "New gym shirt(s)", "-25 lb"),
-                (171.9, "Arcade trip", "-30 lb"), (166.9, "New hat", "-35 lb"),
-                (161.9, "Bowling trip", "-40 lb"), (156.9, "New gym pants", "-45 lb"),
-                (151.9, "Nose piercing", "-50 lb"), (146.9, "New shoes", "-55 lb"),
-                (141.9, "Cheat day", "-60 lb")
+                (181.9, "Video game", f"-20 {UNIT}"), (176.9, "New gym shirt(s)", f"-25 {UNIT}"),
+                (171.9, "Arcade trip", f"-30 {UNIT}"), (166.9, "New hat", f"-35 {UNIT}"),
+                (161.9, "Bowling trip", f"-40 {UNIT}"), (156.9, "New gym pants", f"-45 {UNIT}"),
+                (151.9, "Nose piercing", f"-50 {UNIT}"), (146.9, "New shoes", f"-55 {UNIT}"),
+                (141.9, "Cheat day", f"-60 {UNIT}")
             ]
         else:
             rewards = [
@@ -336,7 +419,6 @@ with tab_dashboard:
 
         st.markdown("<hr>", unsafe_allow_html=True)
         
-        # --- DATE FILTER ---
         st.write("### 📅 Timeframe Filter")
         time_filter = st.radio("Select range to view:", ["Last 7 Days", "Last 14 Days", "Last 30 Days", "All Time"], horizontal=True, label_visibility="collapsed")
         
@@ -350,7 +432,6 @@ with tab_dashboard:
         if df_filtered.empty:
             df_filtered = df.copy()
 
-        # --- TDEE ESTIMATOR ---
         current_deficit = 0
         if len(df) >= 14:
             weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
@@ -358,7 +439,6 @@ with tab_dashboard:
             est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
             current_deficit = est_tdee - CALORIE_GOAL
 
-        # --- WEIGHT CHART ---
         st.subheader("Weight Trend & Goal Forecast")
         fig_weight = go.Figure()
         fig_weight.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Weight'], mode='markers', name=f'Daily Weight', marker=dict(color='#80BFFF', size=6)))
@@ -373,7 +453,6 @@ with tab_dashboard:
         fig_weight.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99), template=theme_template)
         st.plotly_chart(fig_weight, use_container_width=True)
 
-        # --- NUTRITION CHARTS ---
         st.subheader("Nutrition Insights")
         chart_col1, chart_col2 = st.columns([2, 1])
         
@@ -393,7 +472,6 @@ with tab_dashboard:
             fig_pie.update_layout(margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5), template=theme_template)
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        # --- DEFICIT VS REALITY & DOW ---
         if len(df) >= 14:
             st.subheader("⚖️ Deficit vs. Reality")
             df_chart = df_filtered.copy()
@@ -456,7 +534,6 @@ with tab_sim:
 with tab_data:
     st.header("Manage Cloud Data")
     
-    # --- CSV IMPORT TOOL ---
     st.subheader("📤 Import Old Local Data")
     st.write("Upload your old `my_tracking_data.csv` file from your PC to merge it into the cloud database.")
     uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
