@@ -90,17 +90,22 @@ if "celebrated_today" not in st.session_state: st.session_state.celebrated_today
 if "goal_celebrated" not in st.session_state: st.session_state.goal_celebrated = False
 
 # Load Settings specific to logged-in user
+# --- Replace load_settings with this safe version ---
 @st.cache_data(ttl=5)
 def load_settings(username):
     try:
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         user_s = s_df[s_df['Username'] == username]
         if not user_s.empty:
+            unit_val = str(user_s.iloc[0].get('unit', 'lb'))
+            if unit_val.lower() in ['nan', 'none', '']:
+                unit_val = 'lb'
+                
             return {
                 "calorie_goal": int(user_s.iloc[0]['calorie_goal']),
                 "goal_weight": float(user_s.iloc[0]['goal_weight']),
                 "dark_mode": bool(user_s.iloc[0]['dark_mode']),
-                "unit": str(user_s.iloc[0].get('unit', 'lb'))
+                "unit": unit_val
             }
     except Exception:
         pass
