@@ -81,7 +81,7 @@ if not st.session_state.logged_in:
                     s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit", "age", "height", "bf_pct", "ai_tdee"])
                     
                 default_goal = 150.0 if new_unit == "lb" else 70.0
-                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 1900, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 20.0, "ai_tdee": 2000}])
+                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 1900, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000}])
                 s_df = pd.concat([s_df, new_s_df], ignore_index=True)
                 conn.update(worksheet="Settings", data=s_df)
                 
@@ -123,7 +123,7 @@ def load_settings(username):
     return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000.0}
 
 settings = load_settings(st.session_state.username)
-BASE_CALORIE_GOAL = settings["calorie_goal"]
+CALORIE_GOAL = settings["calorie_goal"]
 GOAL_WEIGHT = settings["goal_weight"]
 DARK_MODE = settings["dark_mode"]
 UNIT = settings["unit"]
@@ -134,6 +134,8 @@ AI_TDEE = settings["ai_tdee"]
 
 CALS_PER_UNIT = 3500 if UNIT == "lb" else 7700
 PROTEIN_MULTIPLIER = 0.8 if UNIT == "lb" else 1.76
+HEIGHT_UNIT = "inches" if UNIT == "lb" else "cm"
+WEIGHT_UNIT = "lbs" if UNIT == "lb" else "kg"
 
 # --- UI COLOR & THEME INJECTION ---
 if DARK_MODE:
@@ -208,11 +210,30 @@ except Exception:
     df_all = pd.DataFrame(columns=["Username", "Date", "Weight_Timestamp", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
     df = pd.DataFrame()
 
-# Dynamic Goal Logic for Workouts (+500 cals on workout days)
-worked_out_today = False
-if not df.empty and df.iloc[-1]['Date'].date() == date.today():
-    worked_out_today = bool(df.iloc[-1].get('Workout_Day', False))
-CALORIE_GOAL = BASE_CALORIE_GOAL + (500 if worked_out_today else 0)
+# TDEE CALCULATION (Auto-Adaptive Engine)
+if len(df) >= 14:
+    # Auto-Adaptive: Real-world calculation
+    weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
+    avg_cals = df['Calories'].mean()
+    est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
+    adaptive_active = True
+else:
+    # Baseline AI Engine
+    est_tdee = AI_TDEE
+    adaptive_active = False
+
+# YANI PROTOCOL: Diet Break Trigger
+diet_break_triggered = False
+if st.session_state.username.lower() == "yani" and len(df) >= 7:
+    recent_7 = df.tail(7)
+    # Check if weight 7 days ago is less than or equal to current weight (A stall)
+    if recent_7.iloc[0]['Weight'] <= recent_7.iloc[-1]['Weight']:
+        diet_break_triggered = True
+        CALORIE_GOAL = int(est_tdee) # Override to Maintenance
+    else:
+        CALORIE_GOAL = settings["calorie_goal"]
+else:
+    CALORIE_GOAL = settings["calorie_goal"]
 
 # --- TABS ---
 tab_dashboard, tab_log, tab_ai, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🤖 AI Coach", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
@@ -231,12 +252,10 @@ with tab_log:
             
             with col_m2:
                 st.markdown("<p style='font-size: 14px; color: #555555; margin-bottom: -15px;'>Time of Weigh-In</p>", unsafe_allow_html=True)
-                t_col1, t_sep, t_col2, t_space, t_col3 = st.columns([1, 0.1, 1, 0.2, 1.2])
+                t_col1, t_col2, t_col3 = st.columns([1, 1, 1])
                 now = datetime.now()
                 with t_col1: hr = st.selectbox("Hr", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1, label_visibility="collapsed")
-                with t_sep: st.markdown("<h2 style='text-align:center; color:#4DA6FF; margin-top:-5px;'>:</h2>", unsafe_allow_html=True)
                 with t_col2: mn = st.selectbox("Min", [f"{i:02d}" for i in range(0, 60)], index=int(now.strftime("%M")), label_visibility="collapsed")
-                with t_space: st.write("")
                 with t_col3: ampm = st.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1, label_visibility="collapsed")
                 time_str = f"{hr}:{mn} {ampm}"
             
@@ -289,6 +308,9 @@ with tab_log:
 
 # --- TAB: DASHBOARD ---
 with tab_dashboard:
+    if diet_break_triggered:
+        st.warning(f"⚠️ **Diet Break Protocol Engaged:** Your weight hasn't dropped in 7 days. Your calorie goal has been temporarily raised to maintenance ({int(est_tdee)} kcal) to reset your metabolism.")
+
     if not df.empty:
         df['7-Day Avg'] = df['Weight'].rolling(window=7, min_periods=1).mean()
         first_weight = df.iloc[0]['Weight']
@@ -361,14 +383,6 @@ with tab_dashboard:
         elif time_filter == "Last 30 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=30))]
         if df_filtered.empty: df_filtered = df.copy()
 
-        # DYNAMIC TDEE SYSTEM
-        if len(df) >= 14:
-            weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
-            avg_cals = df['Calories'].mean()
-            est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
-        else:
-            est_tdee = AI_TDEE
-
         current_deficit = est_tdee - CALORIE_GOAL
 
         st.subheader("Weight Trend & Goal Forecast")
@@ -424,7 +438,6 @@ with tab_dashboard:
     else:
         st.info("No data yet. Head over to the 'Log Entry' tab!")
 
-
 # --- TAB: AI COACH (WIX-STYLE CHAT LAYOUT) ---
 with tab_ai:
     st.header("🤖 AI TDEE & Fitness Coach")
@@ -432,26 +445,31 @@ with tab_ai:
     if model is None:
         st.error("⚠️ Please add `gemini_api_key = '...'` to your Streamlit secrets to activate the AI Coach.")
     else:
-        # Layout columns to match image (Chat on left, Profile on right)
         chat_col, profile_col = st.columns([2.5, 1])
         
         with profile_col:
             st.markdown("### 👤 User Profile")
-            st.markdown(f"**Current Weight:** {current_weight if not df.empty else 0:.1f} {UNIT}")
-            st.markdown(f"**Goal Weight:** {GOAL_WEIGHT:.1f} {UNIT}")
-            st.markdown(f"**Height:** {HEIGHT} {'inches' if UNIT == 'lb' else 'cm'}")
+            st.markdown(f"**Current Weight:** {current_weight if not df.empty else 0:.1f} {WEIGHT_UNIT}")
+            st.markdown(f"**Goal Weight:** {GOAL_WEIGHT:.1f} {WEIGHT_UNIT}")
+            st.markdown(f"**Height:** {HEIGHT} {HEIGHT_UNIT}")
             st.markdown(f"**Age:** {AGE}")
-            st.markdown(f"**Body Fat:** {BF_PCT}%")
-            st.markdown(f"**Current Est. TDEE:** <span style='color:#4DA6FF; font-weight:bold; font-size:1.1rem;'>{AI_TDEE} kcal</span>", unsafe_allow_html=True)
+            if BF_PCT > 0:
+                st.markdown(f"**Body Fat:** {BF_PCT}%")
+                
+            if adaptive_active:
+                st.markdown(f"**Current Est. TDEE:** <span style='color:#28a745; font-weight:bold; font-size:1.1rem;'>{est_tdee:.0f} kcal</span> *(Auto-Adaptive Active)*", unsafe_allow_html=True)
+            else:
+                st.markdown(f"**Current Est. TDEE:** <span style='color:#4DA6FF; font-weight:bold; font-size:1.1rem;'>{est_tdee:.0f} kcal</span> *(AI Baseline)*", unsafe_allow_html=True)
+                
             st.info("💡 Tell the AI your typical weekly routine here. It will calculate your baseline TDEE and save it permanently.")
             
         with chat_col:
             img_file = st.file_uploader("📸 Upload Image (Optional: e.g. treadmill results)", type=['png', 'jpg', 'jpeg'])
             
-            if "chat_history" not in st.session_state:
-                st.session_state.chat_history = []
+            # PRE-LOAD INITIAL AI GREETING
+            if "chat_history" not in st.session_state or len(st.session_state.chat_history) == 0:
+                st.session_state.chat_history = [{"role": "assistant", "content": "Hello! I'm your AI fitness coach. Describe your typical weekly routine (or upload a cardio summary photo), and I'll help calculate your baseline TDEE!"}]
                 
-            # Restrict chat to a scrollable box
             chat_container = st.container(height=500)
             
             with chat_container:
@@ -476,14 +494,18 @@ with tab_ai:
                         if img:
                             st.image(img, width=250)
                             
+                    bf_text = f", Body Fat: {BF_PCT}%" if BF_PCT > 0 else ""
                     sys_prompt = f"""You are an advanced fitness AI coach for {st.session_state.username}.
-                    Current User Stats: Age: {AGE}, Height: {HEIGHT} {UNIT}, Current Weight: {current_weight if not df.empty else 0} {UNIT}, Body Fat: {BF_PCT}%.
-                    Your job is to chat with the user, evaluate their overall WEEKLY routine (not just daily), and calculate a baseline Total Daily Energy Expenditure (TDEE).
+                    Current User Stats: Age: {AGE}, Height: {HEIGHT} {HEIGHT_UNIT}, Current Weight: {current_weight if not df.empty else 0} {WEIGHT_UNIT}{bf_text}.
+                    Your job is to chat with the user, evaluate their overall WEEKLY routine, and calculate a baseline Total Daily Energy Expenditure (TDEE).
                     If they upload an image (like a cardio machine summary), read the metrics from it to help assess their expenditure.
-                    Note: The user raises their base to 1,900 calories on week 5, and the extra 500 on workout days is specifically consumed before and after workouts. Keep this in mind when making calorie suggestions.
                     If you calculate a NEW baseline TDEE, you MUST include the exact text 'NEW_TDEE: [number]' at the very end of your response so the system can read it.
-                    CRITICAL PROTOCOL: If the user ever mentions the urge to binge or overeat, you must drop everything and do whatever it takes to stop them. Be fiercely supportive, firm, and provide immediate redirection/distraction techniques to break the cycle.
                     """
+
+                    if st.session_state.username.lower() == "yani":
+                        sys_prompt += """
+                        CRITICAL PROTOCOL: If the user ever mentions the urge to binge or overeat, you must drop everything and do whatever it takes to stop them. Be fiercely supportive, firm, and provide immediate redirection/distraction techniques to break the cycle.
+                        """
                     
                     with st.chat_message("assistant", avatar="🤖"):
                         api_contents = [sys_prompt, user_input]
@@ -505,7 +527,6 @@ with tab_ai:
                             
                         st.markdown(bot_reply)
                         st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
-
 
 # --- TAB: SIMULATOR ---
 with tab_sim:
@@ -551,10 +572,10 @@ with tab_settings:
         new_age = st.number_input("Age", value=AGE, step=1)
     with col2: 
         new_weight = st.number_input(f"Goal Weight ({UNIT})", value=GOAL_WEIGHT, format="%.1f")
-        new_height = st.number_input(f"Total Height ({'inches' if UNIT == 'lb' else 'cm'})", value=HEIGHT, format="%.1f")
+        new_height = st.number_input(f"Total Height ({HEIGHT_UNIT})", value=HEIGHT, format="%.1f")
     with col3: 
         new_unit = st.selectbox("Preferred Unit", ["lb", "kg"], index=0 if UNIT == "lb" else 1)
-        new_bf = st.number_input("Body Fat % (Optional)", value=BF_PCT, format="%.1f")
+        new_bf = st.number_input("Body Fat % (Leave at 0 to ignore)", value=BF_PCT, format="%.1f")
         
     new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
         
