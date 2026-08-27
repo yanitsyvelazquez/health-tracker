@@ -5,53 +5,107 @@ import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
 from streamlit_gsheets import GSheetsConnection
+import hashlib
+
+# --- HELPER FUNCTION: PASSWORD ENCRYPTION ---
+def make_hash(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
 
 # --- 1. UI & STATE CONFIGURATION ---
 st.set_page_config(page_title="Health Tracker", layout="wide")
 
-# --- 2. SECURE LOGIN SYSTEM ---
-EXPECTED_PASSWORD = st.secrets.get("app_password", "admin")
-
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-
-if not st.session_state.logged_in:
-    st.title("🔒 Private Health Dashboard")
-    st.write("Please enter your password to access your data.")
-    
-    pwd = st.text_input("Password", type="password")
-    if st.button("Login", type="primary"):
-        if pwd == EXPECTED_PASSWORD:
-            st.session_state.logged_in = True
-            st.rerun()
-        else:
-            st.error("Incorrect password. Please try again.")
-    st.stop()
-
-# --- (APP CONTINUES BELOW IF LOGGED IN) ---
-
-if "celebrated_today" not in st.session_state:
-    st.session_state.celebrated_today = False
-if "goal_celebrated" not in st.session_state:
-    st.session_state.goal_celebrated = False
+    st.session_state.username = ""
 
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Load Settings from Google Sheets
-@st.cache_data(ttl=5)
-def load_settings():
+# --- 2. SECURE LOGIN & REGISTRATION SYSTEM ---
+if not st.session_state.logged_in:
+    st.title("🔒 Health Dashboard")
+    
     try:
-        s_df = conn.read(worksheet="Settings", ttl=0)
-        return {
-            "calorie_goal": int(s_df.iloc[0]['calorie_goal']),
-            "goal_weight": float(s_df.iloc[0]['goal_weight']),
-            "dark_mode": bool(s_df.iloc[0]['dark_mode'])
-        }
+        users_df = conn.read(worksheet="Users", ttl=0).dropna(how="all")
     except Exception:
-        return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False}
+        users_df = pd.DataFrame(columns=["Username", "Password"])
+        
+    tab_login, tab_register = st.tabs(["Login", "Create Account"])
+    
+    with tab_login:
+        st.write("Welcome back! Please log in.")
+        user_login = st.text_input("Username", key="log_user")
+        pwd_login = st.text_input("Password", type="password", key="log_pwd")
+        
+        if st.button("Login", type="primary"):
+            if user_login in users_df['Username'].values:
+                stored_hash = users_df[users_df['Username'] == user_login]['Password'].iloc[0]
+                if stored_hash == make_hash(pwd_login):
+                    st.session_state.logged_in = True
+                    st.session_state.username = user_login
+                    st.rerun()
+                else:
+                    st.error("Incorrect password.")
+            else:
+                st.error("Username not found. Please create an account.")
+                
+    with tab_register:
+        st.write("Join the dashboard and track your progress.")
+        new_user = st.text_input("New Username", key="reg_user")
+        new_pwd = st.text_input("New Password", type="password", key="reg_pwd")
+        
+        if st.button("Create Account"):
+            if new_user in users_df['Username'].values:
+                st.error("Username already taken! Please choose another.")
+            elif new_user == "" or new_pwd == "":
+                st.warning("Please enter a username and password.")
+            else:
+                # Save new user
+                new_user_df = pd.DataFrame([{"Username": new_user, "Password": make_hash(new_pwd)}])
+                users_df = pd.concat([users_df, new_user_df], ignore_index=True)
+                conn.update(worksheet="Users", data=users_df)
+                
+                # Create default settings for new user
+                try:
+                    s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
+                except Exception:
+                    s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode"])
+                    
+                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 2000, "goal_weight": 150.0, "dark_mode": False}])
+                s_df = pd.concat([s_df, new_s_df], ignore_index=True)
+                conn.update(worksheet="Settings", data=s_df)
+                
+                st.success("Account successfully created! You can now log in.")
+    st.stop() # Halts app here until logged in
 
-settings = load_settings()
+# --- (APP CONTINUES BELOW IF LOGGED IN) ---
+
+st.sidebar.write(f"👤 Logged in as: **{st.session_state.username}**")
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.rerun()
+
+if "celebrated_today" not in st.session_state: st.session_state.celebrated_today = False
+if "goal_celebrated" not in st.session_state: st.session_state.goal_celebrated = False
+
+# Load Settings specific to logged-in user
+@st.cache_data(ttl=5)
+def load_settings(username):
+    try:
+        s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
+        user_s = s_df[s_df['Username'] == username]
+        if not user_s.empty:
+            return {
+                "calorie_goal": int(user_s.iloc[0]['calorie_goal']),
+                "goal_weight": float(user_s.iloc[0]['goal_weight']),
+                "dark_mode": bool(user_s.iloc[0]['dark_mode'])
+            }
+    except Exception:
+        pass
+    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False}
+
+settings = load_settings(st.session_state.username)
 CALORIE_GOAL = settings["calorie_goal"]
 GOAL_WEIGHT = settings["goal_weight"]
 DARK_MODE = settings["dark_mode"]
@@ -78,15 +132,17 @@ else:
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
 
-# --- 3. LOAD DATA FROM CLOUD ---
+# --- 3. LOAD CLOUD DATA (FILTERED BY USER) ---
 try:
-    df = conn.read(worksheet="Data", ttl=0)
-    df = df.dropna(how="all") 
+    df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
+    # Filter for the logged-in user only
+    df = df_all[df_all['Username'] == st.session_state.username].copy()
     if not df.empty:
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values(by='Date').reset_index(drop=True)
 except Exception:
-    df = pd.DataFrame(columns=["Date", "Weight_lb", "Calories", "Protein_g", "Workout_Day", "Notes"])
+    df_all = pd.DataFrame(columns=["Username", "Date", "Weight_lb", "Calories", "Protein_g", "Workout_Day", "Notes"])
+    df = pd.DataFrame()
 
 # --- WEEKLY RECAP POP-UP (SUNDAYS) ---
 if not df.empty and pd.Timestamp.now().day_name() == "Sunday" and "recap_shown" not in st.session_state:
@@ -116,22 +172,23 @@ with tab_log:
 
         if submitted:
             entry_date_str = str(entry_date)
-            new_data = {"Date": entry_date_str, "Weight_lb": weight_input, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}
+            new_data = {"Username": st.session_state.username, "Date": entry_date_str, "Weight_lb": weight_input, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}
             
-            if not df.empty and entry_date_str in df["Date"].dt.strftime('%Y-%m-%d').values:
-                idx = df[df["Date"].dt.strftime('%Y-%m-%d') == entry_date_str].index[0]
+            # Check if user already logged this date
+            mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
+            if not df_all[mask].empty:
+                idx = df_all[mask].index[0]
                 for key, val in new_data.items():
-                    if key != "Date": df.at[idx, key] = val
+                    df_all.at[idx, key] = val
                 st.toast("Cloud entry updated!", icon="✅")
             else:
                 new_entry_df = pd.DataFrame([new_data])
-                new_entry_df['Date'] = pd.to_datetime(new_entry_df['Date'])
-                df = pd.concat([df, new_entry_df], ignore_index=True)
+                df_all = pd.concat([df_all, new_entry_df], ignore_index=True)
                 st.toast("New entry saved to Cloud!", icon="🎉")
             
-            df_upload = df.copy()
-            df_upload['Date'] = pd.to_datetime(df_upload['Date'])
-            df_upload['Date'] = df_upload['Date'].dt.strftime('%Y-%m-%d')
+            # Format dates and push entire database back to cloud
+            df_upload = df_all.copy()
+            df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
             conn.update(worksheet="Data", data=df_upload)
             st.rerun()
 
@@ -330,55 +387,23 @@ with tab_sim:
 # --- TAB: EDIT HISTORY & NOTES ---
 with tab_data:
     st.header("Manage Cloud Data")
-    
-    # --- FIXED CSV IMPORT TOOL ---
-    st.subheader("📤 Import Old Local Data")
-    st.write("Upload your old `my_tracking_data.csv` file from your PC to merge it into the cloud database.")
-    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
-    
-    if uploaded_file is not None:
-        if st.button("Merge Data to Cloud", type="primary"):
-            old_df = pd.read_csv(uploaded_file)
-            
-            if 'Weight' in old_df.columns:
-                old_df['Weight_lb'] = old_df['Weight_lb'].fillna(old_df['Weight']) if 'Weight_lb' in old_df.columns else old_df['Weight']
-                old_df = old_df.drop(columns=['Weight'])
-            for col in ['Protein_g', 'Workout_Day']:
-                if col not in old_df.columns:
-                    old_df[col] = 0 if col == 'Protein_g' else False
-            if 'Notes' not in old_df.columns: 
-                old_df['Notes'] = ""
-            
-            # Safely coerce the incoming dates
-            old_df['Date'] = pd.to_datetime(old_df['Date'], errors='coerce')
-            old_df = old_df.dropna(subset=['Date'])
-            
-            combined_df = pd.concat([df, old_df]).drop_duplicates(subset=['Date'], keep='last')
-            
-            # ENFORCEMENT FIX: Force the combined column back into a strict datetime format before sorting
-            combined_df['Date'] = pd.to_datetime(combined_df['Date'])
-            combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
-            
-            upload_df = combined_df.copy()
-            # Now the strftime command will successfully run
-            upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
-            conn.update(worksheet="Data", data=upload_df)
-            
-            st.success("Your old data was successfully merged into the cloud! Your streak is restored.")
-            st.cache_data.clear()
-            st.rerun()
-            
-    st.markdown("<hr>", unsafe_allow_html=True)
     st.write("**Manual Editor:** Double-click a cell below to edit it directly.")
     
     if not df.empty:
         df_edit = df.copy()
         df_edit['Date'] = pd.to_datetime(df_edit['Date'])
         df_edit['Date'] = df_edit['Date'].dt.strftime('%Y-%m-%d')
+        # Only show the logged-in user's data in the editor!
         edited_df = st.data_editor(df_edit.sort_values(by='Date', ascending=False), num_rows="dynamic", use_container_width=True)
         if st.button("💾 Save Edits to Cloud", type="primary"):
             edited_df = edited_df.dropna(subset=['Date', 'Weight_lb'])
-            conn.update(worksheet="Data", data=edited_df)
+            
+            # Remove old rows for this user, append edited rows, and upload full set
+            df_all_others = df_all[df_all['Username'] != st.session_state.username]
+            new_df_all = pd.concat([df_all_others, edited_df])
+            new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
+            
+            conn.update(worksheet="Data", data=new_df_all)
             st.success("Cloud database updated!")
             st.rerun()
 
@@ -391,8 +416,13 @@ with tab_settings:
     with col3: new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
         
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
-        new_s_df = pd.DataFrame([{"calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode}])
-        conn.update(worksheet="Settings", data=new_s_df)
+        # Fetch all settings, remove current user's old settings, append new settings
+        s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
+        s_df_others = s_df[s_df['Username'] != st.session_state.username]
+        new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode}])
+        updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
+        
+        conn.update(worksheet="Settings", data=updated_s_df)
         st.success("Cloud settings updated! Please wait a few seconds and refresh to see changes.")
         st.cache_data.clear()
         st.rerun()
@@ -403,7 +433,7 @@ with tab_settings:
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", 'B', 16)
-        pdf.cell(200, 10, txt="My Health Tracking Report", ln=True, align='C')
+        pdf.cell(200, 10, txt=f"{st.session_state.username}'s Health Report", ln=True, align='C')
         pdf.set_font("Arial", size=12)
         pdf.cell(200, 10, txt=f"Generated on: {date.today()}", ln=True, align='C')
         pdf.ln(10)
@@ -413,4 +443,4 @@ with tab_settings:
         pdf.cell(200, 10, txt=f"- Starting Weight: {df.iloc[0]['Weight_lb']} lbs", ln=True)
         pdf.cell(200, 10, txt=f"- Current Weight: {df.iloc[-1]['Weight_lb']} lbs", ln=True)
         pdf.cell(200, 10, txt=f"- Total Lost: {df.iloc[0]['Weight_lb'] - df.iloc[-1]['Weight_lb']:.1f} lbs", ln=True)
-        st.download_button(label="Download PDF Report", data=pdf.output(dest='S').encode('latin-1'), file_name="health_report.pdf", mime="application/pdf", type="primary")
+        st.download_button(label="Download PDF Report", data=pdf.output(dest='S').encode('latin-1'), file_name=f"{st.session_state.username}_health_report.pdf", mime="application/pdf", type="primary")
