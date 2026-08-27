@@ -1,0 +1,359 @@
+import streamlit as st
+import pandas as pd
+from datetime import date
+import plotly.express as px
+import plotly.graph_objects as go
+from fpdf import FPDF
+from streamlit_gsheets import GSheetsConnection
+
+# --- 1. UI & STATE CONFIGURATION ---
+st.set_page_config(page_title="Health Tracker", layout="wide")
+
+if "celebrated_today" not in st.session_state:
+    st.session_state.celebrated_today = False
+if "goal_celebrated" not in st.session_state:
+    st.session_state.goal_celebrated = False
+
+# Connect to Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Load Settings from Google Sheets
+@st.cache_data(ttl=5)
+def load_settings():
+    try:
+        s_df = conn.read(worksheet="Settings", ttl=0)
+        return {
+            "calorie_goal": int(s_df.iloc[0]['calorie_goal']),
+            "goal_weight": float(s_df.iloc[0]['goal_weight']),
+            "dark_mode": bool(s_df.iloc[0]['dark_mode'])
+        }
+    except Exception:
+        return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False}
+
+settings = load_settings()
+CALORIE_GOAL = settings["calorie_goal"]
+GOAL_WEIGHT = settings["goal_weight"]
+DARK_MODE = settings["dark_mode"]
+
+# Apply Dark Mode CSS
+if DARK_MODE:
+    st.markdown("""
+        <style>
+        .stApp { background-color: #121212; color: #FFFFFF; }
+        div[data-testid="metric-container"] { background-color: #1E1E1E !important; border-left: 6px solid #4DA6FF !important; }
+        .streak-box, .badge-box { background-color: #1E1E1E !important; color: #4DA6FF !important; border: 1px solid #4DA6FF; }
+        h1, h2, h3, p, span { color: #E0E0E0 !important; }
+        </style>
+    """, unsafe_allow_html=True)
+    theme_template = "plotly_dark"
+else:
+    st.markdown("""
+        <style>
+        div[data-testid="metric-container"] { background-color: #F0F8FF; border-radius: 10px; border-left: 6px solid #00509E; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
+        .streak-box { background-color: #E6F2FF; padding: 15px; border-radius: 10px; text-align: center; color: #00509E; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; }
+        .badge-box { background-color: #00509E; color: white; padding: 15px; border-radius: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; margin-bottom: 20px; }
+        h1, h2, h3 { color: #00509E !important; font-family: 'Helvetica Neue', sans-serif;}
+        </style>
+    """, unsafe_allow_html=True)
+    theme_template = "plotly_white"
+
+# --- 2. LOAD DATA FROM CLOUD ---
+try:
+    df = conn.read(worksheet="Data", ttl=0)
+    df = df.dropna(how="all") # Clean empty rows
+    if not df.empty:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values(by='Date').reset_index(drop=True)
+except Exception:
+    df = pd.DataFrame(columns=["Date", "Weight_lb", "Calories", "Protein_g", "Workout_Day", "Notes"])
+
+# --- WEEKLY RECAP POP-UP (SUNDAYS) ---
+if not df.empty and pd.Timestamp.now().day_name() == "Sunday" and "recap_shown" not in st.session_state:
+    st.balloons()
+    st.toast("📅 Happy Sunday! Check your Weekly Recap below!", icon="🎉")
+    st.session_state.recap_shown = True
+
+# --- TABS ---
+tab_dashboard, tab_log, tab_games, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🎮 Mini-Games & Sims", "📁 Edit History", "⚙️ Settings"])
+
+# --- TAB: LOG ENTRY ---
+with tab_log:
+    st.header("Add or Update an Entry")
+    with st.form("data_form", clear_on_submit=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            entry_date = st.date_input("Select Date", value=date.today())
+            workout_day = st.checkbox("Did you workout today?")
+        with col2:
+            weight_input = st.number_input("Weight (lb)", min_value=0.0, format="%.1f")
+            notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
+        with col3:
+            calorie_input = st.number_input("Calories", min_value=0, step=1)
+            protein_input = st.number_input("Protein (g)", min_value=0, step=1)
+        
+        submitted = st.form_submit_button("Save Entry to Cloud", use_container_width=True)
+
+        if submitted:
+            entry_date_str = str(entry_date)
+            new_data = {"Date": entry_date_str, "Weight_lb": weight_input, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}
+            
+            if not df.empty and entry_date_str in df["Date"].dt.strftime('%Y-%m-%d').values:
+                idx = df[df["Date"].dt.strftime('%Y-%m-%d') == entry_date_str].index[0]
+                for key, val in new_data.items():
+                    if key != "Date": df.at[idx, key] = val
+                st.toast("Cloud entry updated!", icon="✅")
+            else:
+                new_entry_df = pd.DataFrame([new_data])
+                new_entry_df['Date'] = pd.to_datetime(new_entry_df['Date'])
+                df = pd.concat([df, new_entry_df], ignore_index=True)
+                st.toast("New entry saved to Cloud!", icon="🎉")
+            
+            # Format dates back to string for Google Sheets compatibility
+            df_upload = df.copy()
+            df_upload['Date'] = df_upload['Date'].dt.strftime('%Y-%m-%d')
+            conn.update(worksheet="Data", data=df_upload)
+            st.rerun()
+
+# --- TAB: DASHBOARD ---
+with tab_dashboard:
+    if not df.empty:
+        df['7-Day Avg'] = df['Weight_lb'].rolling(window=7, min_periods=1).mean()
+        first_weight = df.iloc[0]['Weight_lb']
+        current_weight = df.iloc[-1]['Weight_lb']
+        total_lost = first_weight - current_weight
+        
+        # --- BULLETPROOF STREAK & FREEZES ---
+        df_desc = df.sort_values(by='Date', ascending=False).reset_index(drop=True)
+        streak = 0
+        freezes_earned = len(df) // 7
+        freezes_used = 0
+        
+        check_date = pd.Timestamp.now().normalize()
+        if not df_desc.empty:
+            last_log = df_desc.loc[0, 'Date'].normalize()
+            if (check_date - last_log).days <= 1:
+                streak = 1
+                for i in range(1, len(df_desc)):
+                    gap = (df_desc.loc[i-1, 'Date'] - df_desc.loc[i, 'Date']).days
+                    if gap == 1:
+                        streak += 1
+                    elif gap == 2 and freezes_used < freezes_earned:
+                        streak += 1 
+                        freezes_used += 1
+                    else:
+                        break
+                        
+        freezes_left = freezes_earned - freezes_used
+        if streak > 0:
+            freeze_text = f" (🧊 {freezes_left} Freezes Available)" if freezes_left > 0 else ""
+            st.markdown(f"<div class='streak-box'>🔥 You are on a {streak}-day logging streak!{freeze_text}</div>", unsafe_allow_html=True)
+        
+        if "recap_shown" in st.session_state and pd.Timestamp.now().day_name() == "Sunday":
+            with st.expander("✨ Your Weekly Recap (Sunday Special!)", expanded=True):
+                st.write(f"**Great job this week!** You protected your streak ({streak} days).")
+                st.write(f"Total weight lost since you started: **{total_lost:.1f} lbs**.")
+
+        # --- CORE METRICS ---
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Current Weight", f"{current_weight:.1f} lb")
+        col2.metric("Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} lb")
+        col3.metric("Total Lost", f"{total_lost:.1f} lb")
+        col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal")
+        
+        # --- NEXT REWARD PROGRESS BAR ---
+        st.markdown("### 🎁 Next Reward Tracker")
+        rewards = [
+            (181.9, "Video game", "-20 lb"), (176.9, "New gym shirt(s)", "-25 lb"),
+            (171.9, "Arcade trip", "-30 lb"), (166.9, "New hat", "-35 lb"),
+            (161.9, "Bowling trip", "-40 lb"), (156.9, "New gym pants", "-45 lb"),
+            (151.9, "Nose piercing", "-50 lb"), (146.9, "New shoes", "-55 lb"),
+            (141.9, "Cheat day", "-60 lb")
+        ]
+        
+        next_reward = None
+        previous_target = first_weight
+        for target, name, label in rewards:
+            if current_weight > target:
+                next_reward = (target, name, label, previous_target)
+                break
+            previous_target = target
+            
+        if next_reward:
+            target_wt, reward_name, label, start_wt = next_reward
+            progress_val = (start_wt - current_weight) / (start_wt - target_wt)
+            progress_val = max(0.0, min(1.0, progress_val)) 
+            lbs_to_go = current_weight - target_wt
+            st.write(f"**Next Unlock:** {reward_name} ({label}) — *Only {lbs_to_go:.1f} lbs to go!*")
+            st.progress(progress_val)
+        else:
+            st.success("🎉 You have unlocked EVERY reward on your roadmap!")
+
+        st.markdown("<hr>", unsafe_allow_html=True)
+        
+        # --- DATE FILTER ---
+        st.write("### 📅 Timeframe Filter")
+        time_filter = st.radio("Select range to view:", ["Last 7 Days", "Last 14 Days", "Last 30 Days", "All Time"], horizontal=True, label_visibility="collapsed")
+        
+        df_filtered = df.copy()
+        now = pd.Timestamp.now().normalize()
+        
+        if time_filter == "Last 7 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=7))]
+        elif time_filter == "Last 14 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=14))]
+        elif time_filter == "Last 30 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=30))]
+
+        if df_filtered.empty:
+            df_filtered = df.copy()
+
+        # --- TDEE ESTIMATOR ---
+        current_deficit = 0
+        if len(df) >= 14:
+            weight_diff = df.iloc[0]['Weight_lb'] - df.iloc[-1]['Weight_lb']
+            avg_cals = df['Calories'].mean()
+            est_tdee = avg_cals + ((weight_diff * 3500) / len(df))
+            current_deficit = est_tdee - CALORIE_GOAL
+
+        # --- WEIGHT CHART ---
+        st.subheader("Weight Trend & Goal Forecast")
+        fig_weight = go.Figure()
+        fig_weight.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Weight_lb'], mode='markers', name='Daily Weight', marker=dict(color='#80BFFF', size=6)))
+        fig_weight.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['7-Day Avg'], mode='lines', name='7-Day Trend', line=dict(color='#00509E', width=3)))
+        fig_weight.add_hline(y=GOAL_WEIGHT, line_dash="dash", line_color="#28a745", annotation_text="Goal Weight", annotation_position="bottom left")
+        
+        if current_deficit > 0 and current_weight > GOAL_WEIGHT:
+            days_to_goal = (current_weight - GOAL_WEIGHT) * 3500 / current_deficit
+            target_date = df['Date'].iloc[-1] + pd.Timedelta(days=days_to_goal)
+            fig_weight.add_trace(go.Scatter(x=[df['Date'].iloc[-1], target_date], y=[current_weight, GOAL_WEIGHT], mode='lines', name='Goal Forecast', line=dict(color='#28a745', dash='dot', width=3)))
+        
+        fig_weight.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99), template=theme_template)
+        st.plotly_chart(fig_weight, use_container_width=True)
+
+        # --- NUTRITION CHARTS ---
+        st.subheader("Nutrition Insights")
+        chart_col1, chart_col2 = st.columns([2, 1])
+        
+        with chart_col1:
+            fig_nut = go.Figure()
+            fig_nut.add_trace(go.Bar(x=df_filtered['Date'], y=df_filtered['Calories'], name='Calories', marker_color='#4DA6FF'))
+            fig_nut.add_hline(y=CALORIE_GOAL, line_dash="dash", line_color="#FF0000", annotation_text="Calorie Target")
+            fig_nut.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Protein_g'], name='Protein (g)', mode='lines+markers', line=dict(color='#FF9900', width=3), yaxis='y2'))
+            fig_nut.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", yaxis=dict(title="Calories"), yaxis2=dict(title="Protein (g)", overlaying="y", side="right", showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), template=theme_template)
+            st.plotly_chart(fig_nut, use_container_width=True)
+            
+        with chart_col2:
+            recent_protein = df_filtered['Protein_g'].mean()
+            recent_cals = df_filtered['Calories'].mean()
+            pie_data = pd.DataFrame({"Source": ["Protein Cals", "Other Cals"], "Calories": [recent_protein * 4, max(recent_cals - (recent_protein * 4), 0)]})
+            fig_pie = px.pie(pie_data, values='Calories', names='Source', hole=0.5, color_discrete_sequence=['#FF9900', '#80BFFF'])
+            fig_pie.update_layout(margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5), template=theme_template)
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        # --- DEFICIT VS REALITY & DOW ---
+        if len(df) >= 14:
+            st.subheader("⚖️ Deficit vs. Reality")
+            df_chart = df_filtered.copy()
+            df_chart['Daily_Deficit'] = est_tdee - df_chart['Calories']
+            df_chart['Cumulative_Deficit'] = df_chart['Daily_Deficit'].cumsum()
+            df_chart['Expected_Weight'] = df_chart.iloc[0]['Weight_lb'] - (df_chart['Cumulative_Deficit'] / 3500)
+            
+            fig_def = go.Figure()
+            fig_def.add_trace(go.Scatter(x=df_chart['Date'], y=df_chart['Expected_Weight'], mode='lines', name='Math Expectation', line=dict(color='#80BFFF', dash='dot')))
+            fig_def.add_trace(go.Scatter(x=df_chart['Date'], y=df_chart['7-Day Avg'], mode='lines', name='Actual Trend', line=dict(color='#FF9900', width=3)))
+            fig_def.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template=theme_template)
+            st.plotly_chart(fig_def, use_container_width=True)
+
+        col_dow, col_scatter = st.columns(2)
+        with col_dow:
+            st.subheader("📅 Day-of-Week Trends")
+            df_filtered['DayOfWeek'] = df_filtered['Date'].dt.day_name()
+            dow_stats = df_filtered.groupby('DayOfWeek')['Calories'].mean().reindex(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']).reset_index()
+            fig_dow = px.bar(dow_stats, x='DayOfWeek', y='Calories', color_discrete_sequence=['#4DA6FF'])
+            fig_dow.add_hline(y=CALORIE_GOAL, line_dash="dash", line_color="#FF0000", annotation_text="Goal")
+            fig_dow.update_layout(margin=dict(l=0, r=0, t=30, b=0), template=theme_template)
+            st.plotly_chart(fig_dow, use_container_width=True)
+            
+        with col_scatter:
+            st.subheader("🎯 Protein Efficiency")
+            fig_scatter = px.scatter(df_filtered, x='Calories', y='Protein_g', hover_data=['Date'], color='Protein_g', color_continuous_scale=['#99ccff', '#00509E'])
+            fig_scatter.add_vline(x=CALORIE_GOAL, line_dash="dash", line_color="#FF0000", annotation_text="Limit")
+            fig_scatter.add_hline(y=GOAL_WEIGHT * 0.8, line_dash="dash", line_color="#FF0000", annotation_text="Target")
+            fig_scatter.update_layout(margin=dict(l=0, r=0, t=30, b=0), coloraxis_showscale=False, template=theme_template)
+            st.plotly_chart(fig_scatter, use_container_width=True)
+
+    else:
+        st.info("No data yet. Head over to the 'Log Entry' tab!")
+
+# --- TAB: MINI-GAMES ---
+with tab_games:
+    st.header("🎮 Gamify Your Journey")
+    
+    st.subheader("🎯 Habit Bingo ($5 Treat Engine)")
+    try:
+        b_df = conn.read(worksheet="Bingo", ttl=0)
+        bingo_state = {str(k): bool(v) for k, v in b_df.iloc[0].to_dict().items()}
+    except Exception:
+        bingo_state = {str(i): False for i in range(9)}
+        
+    habits = ["Hit Calorie Goal", "Hit Protein Goal", "Walk 15 Mins", "Drink 80oz Water", "Log a Workout", "Get 7+ Hrs Sleep", "Survived an Urge", "Ate a Vegetable", "No Late Snacks"]
+    
+    b_cols = st.columns(3)
+    new_state = {}
+    for i in range(9):
+        col = b_cols[i % 3]
+        new_state[str(i)] = col.checkbox(habits[i], value=bingo_state.get(str(i), False), key=f"bingo_{i}")
+        
+    if st.button("Save Bingo Board to Cloud"):
+        new_b_df = pd.DataFrame([new_state])
+        conn.update(worksheet="Bingo", data=new_b_df)
+        if all(new_state.values()):
+            st.balloons()
+            st.success("🎉 BINGO! You crushed your habits. Go enjoy your $5 treat (Ice Cream time!) 🍦")
+            conn.update(worksheet="Bingo", data=pd.DataFrame([{str(i): False for i in range(9)}]))
+        else:
+            st.toast("Cloud board saved!")
+            st.rerun()
+
+# --- TAB: EDIT HISTORY & NOTES ---
+with tab_data:
+    st.header("Manage Cloud Data")
+    if not df.empty:
+        df_edit = df.copy()
+        df_edit['Date'] = df_edit['Date'].dt.strftime('%Y-%m-%d')
+        edited_df = st.data_editor(df_edit.sort_values(by='Date', ascending=False), num_rows="dynamic", use_container_width=True)
+        if st.button("💾 Save Edits to Cloud", type="primary"):
+            edited_df = edited_df.dropna(subset=['Date', 'Weight_lb'])
+            conn.update(worksheet="Data", data=edited_df)
+            st.success("Cloud database updated!")
+            st.rerun()
+
+# --- TAB: GOALS & SETTINGS ---
+with tab_settings:
+    st.header("⚙️ Cloud Settings")
+    col1, col2, col3 = st.columns(3)
+    with col1: new_cal = st.number_input("Daily Calorie Goal", value=CALORIE_GOAL, step=50)
+    with col2: new_weight = st.number_input("Goal Weight (lb)", value=GOAL_WEIGHT, format="%.1f")
+    with col3: new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
+        
+    if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
+        new_s_df = pd.DataFrame([{"calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode}])
+        conn.update(worksheet="Settings", data=new_s_df)
+        st.success("Cloud settings updated! Please wait a few seconds and refresh to see changes.")
+        st.cache_data.clear()
+        st.rerun()
+        
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.subheader("📄 Generate PDF Report")
+    if st.button("Generate Monthly PDF") and not df.empty:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(200, 10, txt="My Health Tracking Report", ln=True, align='C')
+        pdf.set_font("Arial", size=12)
+        pdf.cell(200, 10, txt=f"Generated on: {date.today()}", ln=True, align='C')
+        pdf.ln(10)
+        pdf.set_font("Arial", 'B', 14)
+        pdf.cell(200, 10, txt="Core Metrics:", ln=True)
+        pdf.set_font("Arial", size=12)
+        pdf.cell(200, 10, txt=f"- Starting Weight: {df.iloc[0]['Weight_lb']} lbs", ln=True)
+        pdf.cell(200, 10, txt=f"- Current Weight: {df.iloc[-1]['Weight_lb']} lbs", ln=True)
+        pdf.cell(200, 10, txt=f"- Total Lost: {df.iloc[0]['Weight_lb'] - df.iloc[-1]['Weight_lb']:.1f} lbs", ln=True)
+        st.download_button(label="Download PDF Report", data=pdf.output(dest='S').encode('latin-1'), file_name="health_report.pdf", mime="application/pdf", type="primary")
