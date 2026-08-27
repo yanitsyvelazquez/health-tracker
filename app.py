@@ -135,6 +135,12 @@ else:
 # --- 3. LOAD CLOUD DATA (FILTERED BY USER) ---
 try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
+    
+    # FIX: Force Google Sheets text into actual numbers for math operations!
+    for col in ["Weight_lb", "Calories", "Protein_g"]:
+        if col in df_all.columns:
+            df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
+            
     # Filter for the logged-in user only
     df = df_all[df_all['Username'] == st.session_state.username].copy()
     if not df.empty:
@@ -387,6 +393,47 @@ with tab_sim:
 # --- TAB: EDIT HISTORY & NOTES ---
 with tab_data:
     st.header("Manage Cloud Data")
+    
+    # --- CSV IMPORT TOOL ---
+    st.subheader("📤 Import Old Local Data")
+    st.write("Upload your old `my_tracking_data.csv` file from your PC to merge it into the cloud database.")
+    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
+    
+    if uploaded_file is not None:
+        if st.button("Merge Data to Cloud", type="primary"):
+            old_df = pd.read_csv(uploaded_file)
+            
+            if 'Weight' in old_df.columns:
+                old_df['Weight_lb'] = old_df['Weight_lb'].fillna(old_df['Weight']) if 'Weight_lb' in old_df.columns else old_df['Weight']
+                old_df = old_df.drop(columns=['Weight'])
+            for col in ['Protein_g', 'Workout_Day']:
+                if col not in old_df.columns:
+                    old_df[col] = 0 if col == 'Protein_g' else False
+            if 'Notes' not in old_df.columns: 
+                old_df['Notes'] = ""
+            
+            old_df['Username'] = st.session_state.username
+            
+            old_df['Date'] = pd.to_datetime(old_df['Date'], errors='coerce')
+            old_df = old_df.dropna(subset=['Date'])
+            
+            # Convert values to numbers for safety
+            for col in ["Weight_lb", "Calories", "Protein_g"]:
+                old_df[col] = pd.to_numeric(old_df[col], errors='coerce')
+            
+            combined_df = pd.concat([df_all, old_df]).drop_duplicates(subset=['Username', 'Date'], keep='last')
+            combined_df['Date'] = pd.to_datetime(combined_df['Date'])
+            combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
+            
+            upload_df = combined_df.copy()
+            upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
+            conn.update(worksheet="Data", data=upload_df)
+            
+            st.success("Your old data was successfully merged into the cloud! Your streak is restored.")
+            st.cache_data.clear()
+            st.rerun()
+            
+    st.markdown("<hr>", unsafe_allow_html=True)
     st.write("**Manual Editor:** Double-click a cell below to edit it directly.")
     
     if not df.empty:
@@ -398,7 +445,6 @@ with tab_data:
         if st.button("💾 Save Edits to Cloud", type="primary"):
             edited_df = edited_df.dropna(subset=['Date', 'Weight_lb'])
             
-            # Remove old rows for this user, append edited rows, and upload full set
             df_all_others = df_all[df_all['Username'] != st.session_state.username]
             new_df_all = pd.concat([df_all_others, edited_df])
             new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
@@ -416,7 +462,6 @@ with tab_settings:
     with col3: new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
         
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
-        # Fetch all settings, remove current user's old settings, append new settings
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         s_df_others = s_df[s_df['Username'] != st.session_state.username]
         new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode}])
