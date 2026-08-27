@@ -142,7 +142,9 @@ else:
 try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
     
-    # Rename old Weight_lb column to just Weight for flexibility
+    if df_all.empty:
+        df_all = pd.DataFrame(columns=["Username", "Date", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
+    
     if 'Weight_lb' in df_all.columns:
         df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
         
@@ -152,8 +154,8 @@ try:
             
     df = df_all[df_all['Username'] == st.session_state.username].copy()
     if not df.empty:
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.sort_values(by='Date').reset_index(drop=True)
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date']).sort_values(by='Date').reset_index(drop=True)
 except Exception:
     df_all = pd.DataFrame(columns=["Username", "Date", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
     df = pd.DataFrame()
@@ -184,11 +186,19 @@ with tab_log:
         
         submitted = st.form_submit_button("Save Entry to Cloud", use_container_width=True)
 
-        if submitted:
+       if submitted:
             entry_date_str = str(entry_date)
-            new_data = {"Username": st.session_state.username, "Date": entry_date_str, "Weight": weight_input, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}
+            new_data = {
+                "Username": st.session_state.username, 
+                "Date": entry_date_str, 
+                "Weight": weight_input, 
+                "Calories": calorie_input, 
+                "Protein_g": protein_input, 
+                "Workout_Day": workout_day, 
+                "Notes": notes_input
+            }
             
-            mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
+            mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date'], errors='coerce').dt.strftime('%Y-%m-%d') == entry_date_str)
             if not df_all[mask].empty:
                 idx = df_all[mask].index[0]
                 for key, val in new_data.items():
@@ -202,7 +212,15 @@ with tab_log:
             df_upload = df_all.copy()
             df_upload['Date'] = pd.to_datetime(df_upload['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
             df_upload = df_upload.dropna(subset=['Date'])
+            
+            # 1. Update the cloud worksheet
             conn.update(worksheet="Data", data=df_upload)
+            
+            # 2. CLEAR CACHE so the app fetches the new data immediately
+            st.cache_data.clear()
+            
+            # 3. Rerun the app
+            st.rerun()
 
 # --- TAB: DASHBOARD ---
 with tab_dashboard:
