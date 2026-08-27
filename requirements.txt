@@ -4,3 +4,4 @@ plotly
 fpdf
 st-gsheets-connection
 google-generativeai
+pillow
