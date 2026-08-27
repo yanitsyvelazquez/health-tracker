@@ -186,7 +186,7 @@ with tab_log:
         
         submitted = st.form_submit_button("Save Entry to Cloud", use_container_width=True)
 
-       if submitted:
+        if submitted:
             entry_date_str = str(entry_date)
             new_data = {
                 "Username": st.session_state.username, 
@@ -213,13 +213,11 @@ with tab_log:
             df_upload['Date'] = pd.to_datetime(df_upload['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
             df_upload = df_upload.dropna(subset=['Date'])
             
-            # 1. Update the cloud worksheet
+            # Save to Cloud
             conn.update(worksheet="Data", data=df_upload)
             
-            # 2. CLEAR CACHE so the app fetches the new data immediately
+            # Clear cache & rerun to show data instantly
             st.cache_data.clear()
-            
-            # 3. Rerun the app
             st.rerun()
 
 # --- TAB: DASHBOARD ---
