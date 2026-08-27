@@ -3,3 +3,4 @@ pandas
 plotly
 fpdf
 st-gsheets-connection
+google-generativeai
