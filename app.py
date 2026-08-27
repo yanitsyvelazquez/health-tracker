@@ -391,10 +391,12 @@ with tab_dashboard:
         fig_weight.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['7-Day Avg'], mode='lines', name='7-Day Trend', line=dict(color='#00509E', width=3)))
         fig_weight.add_hline(y=GOAL_WEIGHT, line_dash="dash", line_color="#28a745", annotation_text="Goal Weight", annotation_position="bottom left")
         
-        if current_deficit > 0 and current_weight > GOAL_WEIGHT:
+        # --- THE FIX: Capping max projection distance and requiring a meaningful deficit ---
+        if current_deficit > 50 and current_weight > GOAL_WEIGHT:
             days_to_goal = (current_weight - GOAL_WEIGHT) * CALS_PER_UNIT / current_deficit
-            target_date = df['Date'].iloc[-1] + pd.Timedelta(days=days_to_goal)
-            fig_weight.add_trace(go.Scatter(x=[df['Date'].iloc[-1], target_date], y=[current_weight, GOAL_WEIGHT], mode='lines', name='Goal Forecast', line=dict(color='#28a745', dash='dot', width=3)))
+            if days_to_goal < 3650:  # Prevents crash by capping the visual line to a 10-year maximum
+                target_date = df['Date'].iloc[-1] + pd.Timedelta(days=days_to_goal)
+                fig_weight.add_trace(go.Scatter(x=[df['Date'].iloc[-1], target_date], y=[current_weight, GOAL_WEIGHT], mode='lines', name='Goal Forecast', line=dict(color='#28a745', dash='dot', width=3)))
         
         fig_weight.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99), template=theme_template)
         st.plotly_chart(fig_weight, use_container_width=True)
@@ -466,7 +468,6 @@ with tab_ai:
         with chat_col:
             img_file = st.file_uploader("📸 Upload Image (Optional: e.g. treadmill results)", type=['png', 'jpg', 'jpeg'])
             
-            # PRE-LOAD INITIAL AI GREETING
             if "chat_history" not in st.session_state or len(st.session_state.chat_history) == 0:
                 st.session_state.chat_history = [{"role": "assistant", "content": "Hello! I'm your AI fitness coach. Describe your typical weekly routine (or upload a cardio summary photo), and I'll help calculate your baseline TDEE!"}]
                 
