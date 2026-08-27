@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
@@ -90,36 +90,17 @@ if "celebrated_today" not in st.session_state: st.session_state.celebrated_today
 if "goal_celebrated" not in st.session_state: st.session_state.goal_celebrated = False
 
 # Load Settings specific to logged-in user
-# --- HELPER FUNCTION: LOAD USER REWARDS ---
-@st.cache_data(ttl=5)
-def load_rewards(username):
-    try:
-        r_df = conn.read(worksheet="Rewards", ttl=0).dropna(how="all")
-        user_r = r_df[r_df['Username'] == username].copy()
-        if not user_r.empty:
-            user_r['Target_Weight'] = pd.to_numeric(user_r['Target_Weight'], errors='coerce')
-            user_r = user_r.dropna(subset=['Target_Weight']).sort_values(by='Target_Weight', ascending=False)
-            return [(row['Target_Weight'], row['Reward_Name']) for _, row in user_r.iterrows()]
-    except Exception:
-        pass
-    
-    # Return empty list by default if no rewards are saved
-    return []
 @st.cache_data(ttl=5)
 def load_settings(username):
     try:
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         user_s = s_df[s_df['Username'] == username]
         if not user_s.empty:
-            unit_val = str(user_s.iloc[0].get('unit', 'lb'))
-            if unit_val.lower() in ['nan', 'none', '']:
-                unit_val = 'lb'
-                
             return {
                 "calorie_goal": int(user_s.iloc[0]['calorie_goal']),
                 "goal_weight": float(user_s.iloc[0]['goal_weight']),
                 "dark_mode": bool(user_s.iloc[0]['dark_mode']),
-                "unit": unit_val
+                "unit": str(user_s.iloc[0].get('unit', 'lb'))
             }
     except Exception:
         pass
@@ -161,11 +142,14 @@ else:
 try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
     
-    if df_all.empty:
-        df_all = pd.DataFrame(columns=["Username", "Date", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
-    
     if 'Weight_lb' in df_all.columns:
         df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
+        
+    # Ensure Timestamp column exists
+    if 'Weight_Timestamp' not in df_all.columns:
+        df_all['Weight_Timestamp'] = ""
+    else:
+        df_all['Weight_Timestamp'] = df_all['Weight_Timestamp'].fillna("")
         
     for col in ["Weight", "Calories", "Protein_g"]:
         if col in df_all.columns:
@@ -173,10 +157,10 @@ try:
             
     df = df_all[df_all['Username'] == st.session_state.username].copy()
     if not df.empty:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df = df.dropna(subset=['Date']).sort_values(by='Date').reset_index(drop=True)
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.sort_values(by='Date').reset_index(drop=True)
 except Exception:
-    df_all = pd.DataFrame(columns=["Username", "Date", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
+    df_all = pd.DataFrame(columns=["Username", "Date", "Weight_Timestamp", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
     df = pd.DataFrame()
 
 # --- WEEKLY RECAP POP-UP (SUNDAYS) ---
@@ -188,56 +172,79 @@ if not df.empty and pd.Timestamp.now().day_name() == "Sunday" and "recap_shown" 
 # --- TABS ---
 tab_dashboard, tab_log, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
 
-# --- TAB: LOG ENTRY ---
+# --- TAB: LOG ENTRY (SPLIT MORNING / EVENING) ---
 with tab_log:
-    st.header("Add or Update an Entry")
-    with st.form("data_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            entry_date = st.date_input("Select Date", value=date.today())
-            workout_day = st.checkbox("Did you workout today?")
-        with col2:
-            weight_input = st.number_input(f"Weight ({UNIT})", min_value=0.0, format="%.1f")
-            notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
-        with col3:
-            calorie_input = st.number_input("Calories", min_value=0, step=1)
-            protein_input = st.number_input("Protein (g)", min_value=0, step=1)
-        
-        submitted = st.form_submit_button("Save Entry to Cloud", use_container_width=True)
+    st.header("Daily Tracking")
+    log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition"])
+    
+    # MORNING FORM
+    with log_tab1:
+        with st.form("morning_form", clear_on_submit=True):
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                entry_date_m = st.date_input("Date", value=date.today(), key="m_date")
+                weight_input = st.number_input(f"Weight ({UNIT})", min_value=0.0, format="%.1f")
+            with col_m2:
+                weigh_in_time = st.time_input("Time of Weigh-In", value="now")
+            
+            submit_morning = st.form_submit_button("Save Morning Weigh-In", use_container_width=True)
+            
+            if submit_morning:
+                entry_date_str = str(entry_date_m)
+                time_str = weigh_in_time.strftime("%I:%M %p")
+                
+                mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
+                if not df_all[mask].empty:
+                    idx = df_all[mask].index[0]
+                    df_all.at[idx, 'Weight'] = weight_input
+                    df_all.at[idx, 'Weight_Timestamp'] = time_str
+                    st.toast("Morning weigh-in updated!", icon="✅")
+                else:
+                    new_data = {"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": time_str, "Weight": weight_input, "Calories": 0, "Protein_g": 0, "Workout_Day": False, "Notes": ""}
+                    new_entry_df = pd.DataFrame([new_data])
+                    df_all = pd.concat([df_all, new_entry_df], ignore_index=True)
+                    st.toast("Morning weigh-in saved!", icon="🎉")
+                
+                df_upload = df_all.copy()
+                df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
+                conn.update(worksheet="Data", data=df_upload)
+                st.rerun()
 
-        if submitted:
-            entry_date_str = str(entry_date)
-            new_data = {
-                "Username": st.session_state.username, 
-                "Date": entry_date_str, 
-                "Weight": weight_input, 
-                "Calories": calorie_input, 
-                "Protein_g": protein_input, 
-                "Workout_Day": workout_day, 
-                "Notes": notes_input
-            }
+    # EVENING FORM
+    with log_tab2:
+        with st.form("evening_form", clear_on_submit=True):
+            entry_date_e = st.date_input("Date", value=date.today(), key="e_date")
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                calorie_input = st.number_input("Calories", min_value=0, step=1)
+                protein_input = st.number_input("Protein (g)", min_value=0, step=1)
+            with col_e2:
+                workout_day = st.checkbox("Did you workout today?")
+                notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
             
-            mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date'], errors='coerce').dt.strftime('%Y-%m-%d') == entry_date_str)
-            if not df_all[mask].empty:
-                idx = df_all[mask].index[0]
-                for key, val in new_data.items():
-                    df_all.at[idx, key] = val
-                st.toast("Cloud entry updated!", icon="✅")
-            else:
-                new_entry_df = pd.DataFrame([new_data])
-                df_all = pd.concat([df_all, new_entry_df], ignore_index=True)
-                st.toast("New entry saved to Cloud!", icon="🎉")
+            submit_evening = st.form_submit_button("Save Evening Nutrition", use_container_width=True)
             
-            df_upload = df_all.copy()
-            df_upload['Date'] = pd.to_datetime(df_upload['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            df_upload = df_upload.dropna(subset=['Date'])
-            
-            # Save to Cloud
-            conn.update(worksheet="Data", data=df_upload)
-            
-            # Clear cache & rerun to show data instantly
-            st.cache_data.clear()
-            st.rerun()
+            if submit_evening:
+                entry_date_str = str(entry_date_e)
+                
+                mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
+                if not df_all[mask].empty:
+                    idx = df_all[mask].index[0]
+                    df_all.at[idx, 'Calories'] = calorie_input
+                    df_all.at[idx, 'Protein_g'] = protein_input
+                    df_all.at[idx, 'Workout_Day'] = workout_day
+                    df_all.at[idx, 'Notes'] = notes_input
+                    st.toast("Evening nutrition updated!", icon="✅")
+                else:
+                    new_data = {"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}
+                    new_entry_df = pd.DataFrame([new_data])
+                    df_all = pd.concat([df_all, new_entry_df], ignore_index=True)
+                    st.toast("Evening nutrition saved (No weight logged yet)!", icon="🎉")
+                
+                df_upload = df_all.copy()
+                df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
+                conn.update(worksheet="Data", data=df_upload)
+                st.rerun()
 
 # --- TAB: DASHBOARD ---
 with tab_dashboard:
@@ -246,6 +253,10 @@ with tab_dashboard:
         first_weight = df.iloc[0]['Weight']
         current_weight = df.iloc[-1]['Weight']
         total_lost = first_weight - current_weight
+        
+        # Determine last weigh-in time if available
+        last_time = df.iloc[-1].get('Weight_Timestamp', '')
+        time_display = f" at {last_time}" if pd.notna(last_time) and str(last_time).strip() != "" else ""
         
         # --- BULLETPROOF STREAK & FREEZES ---
         df_desc = df.sort_values(by='Date', ascending=False).reset_index(drop=True)
@@ -280,38 +291,50 @@ with tab_dashboard:
 
         # --- CORE METRICS ---
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}")
+        col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", help=f"Last logged{time_display}")
         col2.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}")
         col3.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}")
         col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal")
         
-       # --- DYNAMIC REWARD TRACKER ---
-        rewards = load_rewards(st.session_state.username)
+        # --- DYNAMIC REWARD TRACKER ---
+        st.markdown("### 🎁 Next Reward Tracker")
         
-        # Only render the system if the user has created at least one reward
-        if rewards:
-            st.markdown("### 🎁 Next Reward Tracker")
+        if st.session_state.username.lower() == "yani":
+            rewards = [
+                (181.9, "Video game", "-20 lb"), (176.9, "New gym shirt(s)", "-25 lb"),
+                (171.9, "Arcade trip", "-30 lb"), (166.9, "New hat", "-35 lb"),
+                (161.9, "Bowling trip", "-40 lb"), (156.9, "New gym pants", "-45 lb"),
+                (151.9, "Nose piercing", "-50 lb"), (146.9, "New shoes", "-55 lb"),
+                (141.9, "Cheat day", "-60 lb")
+            ]
+        else:
+            rewards = [
+                (first_weight - 5, "Level 1 Milestone", f"-5 {UNIT}"),
+                (first_weight - 10, "Level 2 Milestone", f"-10 {UNIT}"),
+                (first_weight - 15, "Level 3 Milestone", f"-15 {UNIT}"),
+                (first_weight - 20, "Level 4 Milestone", f"-20 {UNIT}"),
+                (first_weight - 25, "Level 5 Milestone", f"-25 {UNIT}")
+            ]
+        
+        next_reward = None
+        previous_target = first_weight
+        for target, name, label in rewards:
+            if current_weight > target:
+                next_reward = (target, name, label, previous_target)
+                break
+            previous_target = target
             
-            next_reward = None
-            previous_target = first_weight
-            for target, name in rewards:
-                if current_weight > target:
-                    label = f"-{first_weight - target:.0f} {UNIT}"
-                    next_reward = (target, name, label, previous_target)
-                    break
-                previous_target = target
-            
-            if next_reward:
-                target_wt, reward_name, label, start_wt = next_reward
-                progress_val = (start_wt - current_weight) / (start_wt - target_wt) if start_wt != target_wt else 1.0
-                progress_val = max(0.0, min(1.0, progress_val)) 
-                amount_to_go = current_weight - target_wt
-                st.write(f"**Next Unlock:** {reward_name} ({label}) — *Only {amount_to_go:.1f} {UNIT} to go!*")
-                st.progress(progress_val)
-            else:
-                st.success("🎉 You have unlocked EVERY reward on your roadmap!")
+        if next_reward:
+            target_wt, reward_name, label, start_wt = next_reward
+            progress_val = (start_wt - current_weight) / (start_wt - target_wt)
+            progress_val = max(0.0, min(1.0, progress_val)) 
+            amount_to_go = current_weight - target_wt
+            st.write(f"**Next Unlock:** {reward_name} ({label}) — *Only {amount_to_go:.1f} {UNIT} to go!*")
+            st.progress(progress_val)
+        else:
+            st.success("🎉 You have unlocked EVERY reward on your roadmap!")
 
-            st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("<hr>", unsafe_allow_html=True)
         
         # --- DATE FILTER ---
         st.write("### 📅 Timeframe Filter")
@@ -444,6 +467,8 @@ with tab_data:
             
             if 'Weight_lb' in old_df.columns:
                 old_df.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
+            if 'Weight_Timestamp' not in old_df.columns:
+                old_df['Weight_Timestamp'] = ""
             for col in ['Protein_g', 'Workout_Day']:
                 if col not in old_df.columns:
                     old_df[col] = 0 if col == 'Protein_g' else False
@@ -463,8 +488,7 @@ with tab_data:
             combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
             
             upload_df = combined_df.copy()
-            combined_df['Date'] = pd.to_datetime(combined_df['Date'], errors='coerce')
-            combined_df = combined_df.dropna(subset=['Date'])
+            upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
             conn.update(worksheet="Data", data=upload_df)
             
             st.success("Your old data was successfully merged into the cloud! Your streak is restored.")
@@ -484,8 +508,7 @@ with tab_data:
             
             df_all_others = df_all[df_all['Username'] != st.session_state.username]
             new_df_all = pd.concat([df_all_others, edited_df])
-            new_df_all['Date'] = pd.to_datetime(new_df_all['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            new_df_all = new_df_all.dropna(subset=['Date'])
+            new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
             
             conn.update(worksheet="Data", data=new_df_all)
             st.success("Cloud database updated!")
@@ -511,38 +534,6 @@ with tab_settings:
         conn.update(worksheet="Settings", data=updated_s_df)
         st.success("Cloud settings updated! Please wait a few seconds and refresh to see changes.")
         st.cache_data.clear()
-        st.rerun()
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.subheader("🎁 Personal Reward Roadmap")
-    st.write("Customize the rewards you unlock as you reach new weight milestones. (Leave empty to keep the reward tracker hidden).")
-    
-    try:
-        rewards_df_all = conn.read(worksheet="Rewards", ttl=0).dropna(how="all")
-    except Exception:
-        rewards_df_all = pd.DataFrame(columns=["Username", "Target_Weight", "Reward_Name"])
-        
-    user_rewards_df = rewards_df_all[rewards_df_all['Username'] == st.session_state.username][["Target_Weight", "Reward_Name"]].copy()
-    
-    edited_rewards = st.data_editor(
-        user_rewards_df.sort_values(by="Target_Weight", ascending=False),
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Target_Weight": st.column_config.NumberColumn(f"Target Weight ({UNIT})", format="%.1f"),
-            "Reward_Name": st.column_config.TextColumn("Reward / Milestone Name")
-        }
-    )
-    
-    if st.button("💾 Save Rewards to Cloud", type="primary"):
-        edited_rewards = edited_rewards.dropna(subset=['Target_Weight', 'Reward_Name'])
-        edited_rewards['Username'] = st.session_state.username
-        
-        other_rewards = rewards_df_all[rewards_df_all['Username'] != st.session_state.username]
-        updated_rewards_all = pd.concat([other_rewards, edited_rewards], ignore_index=True)
-        
-        conn.update(worksheet="Rewards", data=updated_rewards_all)
-        st.cache_data.clear()
-        st.success("Your reward roadmap has been saved!")
         st.rerun()
         
     st.markdown("<hr>", unsafe_allow_html=True)
