@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 from streamlit_gsheets import GSheetsConnection
 import hashlib
+import google.generativeai as genai
+import re
 
 # --- HELPER FUNCTION: PASSWORD ENCRYPTION ---
 def make_hash(password):
@@ -20,6 +22,13 @@ if "logged_in" not in st.session_state:
 
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Configure AI
+try:
+    genai.configure(api_key=st.secrets["gemini_api_key"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception:
+    model = None
 
 # --- 2. SECURE LOGIN & REGISTRATION SYSTEM ---
 if not st.session_state.logged_in:
@@ -68,10 +77,10 @@ if not st.session_state.logged_in:
                 try:
                     s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
                 except Exception:
-                    s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit"])
+                    s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit", "age", "height", "bf_pct", "ai_tdee"])
                     
                 default_goal = 150.0 if new_unit == "lb" else 70.0
-                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 2000, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit}])
+                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 2000, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 20.0, "ai_tdee": 2000}])
                 s_df = pd.concat([s_df, new_s_df], ignore_index=True)
                 conn.update(worksheet="Settings", data=s_df)
                 
@@ -84,10 +93,8 @@ st.sidebar.write(f"👤 Logged in as: **{st.session_state.username}**")
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.username = ""
+    st.session_state.chat_history = []
     st.rerun()
-
-if "celebrated_today" not in st.session_state: st.session_state.celebrated_today = False
-if "goal_celebrated" not in st.session_state: st.session_state.goal_celebrated = False
 
 # Load Settings specific to logged-in user
 @st.cache_data(ttl=5)
@@ -96,75 +103,61 @@ def load_settings(username):
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         user_s = s_df[s_df['Username'] == username]
         if not user_s.empty:
+            unit_val = user_s.iloc[0].get('unit', 'lb')
+            if pd.isna(unit_val) or str(unit_val).lower() == 'nan' or str(unit_val).strip() == '':
+                unit_val = "lb"
+                
             return {
                 "calorie_goal": int(user_s.iloc[0]['calorie_goal']),
                 "goal_weight": float(user_s.iloc[0]['goal_weight']),
                 "dark_mode": bool(user_s.iloc[0]['dark_mode']),
-                "unit": str(user_s.iloc[0].get('unit', 'lb'))
+                "unit": str(unit_val),
+                "age": int(user_s.iloc[0].get('age', 25)),
+                "height": float(user_s.iloc[0].get('height', 65.0)),
+                "bf_pct": float(user_s.iloc[0].get('bf_pct', 0.0)),
+                "ai_tdee": float(user_s.iloc[0].get('ai_tdee', 2000.0))
             }
     except Exception:
         pass
-    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb"}
+    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000.0}
 
 settings = load_settings(st.session_state.username)
-CALORIE_GOAL = settings["calorie_goal"]
+BASE_CALORIE_GOAL = settings["calorie_goal"]
 GOAL_WEIGHT = settings["goal_weight"]
 DARK_MODE = settings["dark_mode"]
+UNIT = settings["unit"]
+AGE = settings["age"]
+HEIGHT = settings["height"]
+BF_PCT = settings["bf_pct"]
+AI_TDEE = settings["ai_tdee"]
 
-# --- STRICT UNIT FIX ---
-UNIT = str(settings.get("unit", "lb")).strip().lower()
-if UNIT == "nan" or UNIT == "none" or UNIT == "":
-    UNIT = "lb"
-
-# Math Conversions based on Unit
 CALS_PER_UNIT = 3500 if UNIT == "lb" else 7700
 PROTEIN_MULTIPLIER = 0.8 if UNIT == "lb" else 1.76
 
-# --- UI COLOR & THEME INJECTION (BLUE PALETTE & ANIMATIONS) ---
+# --- UI COLOR & THEME INJECTION ---
 if DARK_MODE:
     st.markdown("""
         <style>
         .stApp { background-color: #121212; color: #FFFFFF; }
         h1, h2, h3, p, span { color: #E0E0E0 !important; }
-        
-        /* Metric Box Animation */
-        div[data-testid="stMetric"] { 
-            background: linear-gradient(145deg, #1E1E1E, #2A2A2A); 
-            padding: 15px !important; 
-            border-radius: 12px !important;
-            border-left: 6px solid #4DA6FF !important; 
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5) !important;
-            transition: transform 0.2s ease, box-shadow 0.2s ease !important;
-        }
-        div[data-testid="stMetric"]:hover {
-            transform: translateY(-5px) !important;
-            box-shadow: 0 8px 15px rgba(77, 166, 255, 0.15) !important;
-        }
-        
-        /* Streak Box Styling */
-        .streak-box { 
-            background: linear-gradient(145deg, #1E1E1E, #2A2A2A) !important; 
-            color: #4DA6FF !important; 
-            border: 1px solid #4DA6FF; 
-            padding: 15px; border-radius: 12px; text-align: center; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; 
-            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-            transition: transform 0.2s ease;
-        }
+        div[data-testid="stMetric"] { background: linear-gradient(145deg, #1E1E1E, #2A2A2A); padding: 15px !important; border-radius: 12px !important; border-left: 6px solid #4DA6FF !important; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5) !important; transition: transform 0.2s ease, box-shadow 0.2s ease !important; height: 100%;}
+        div[data-testid="stMetric"]:hover { transform: translateY(-5px) !important; box-shadow: 0 8px 15px rgba(77, 166, 255, 0.15) !important; }
+        .streak-box { background: linear-gradient(145deg, #1E1E1E, #2A2A2A) !important; color: #4DA6FF !important; border: 1px solid #4DA6FF; padding: 15px; border-radius: 12px; text-align: center; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); transition: transform 0.2s ease; }
         .streak-box:hover { transform: translateY(-3px); }
-        
-        /* Custom Blue Tabs */
         button[data-baseweb="tab"] { background-color: transparent !important; padding: 10px 20px !important; border-radius: 8px !important; margin-right: 5px !important; transition: all 0.3s ease !important; color: #A0A0A0 !important; }
         button[data-baseweb="tab"]:hover { background-color: rgba(77, 166, 255, 0.15) !important; transform: translateY(-2px); color: #4DA6FF !important; }
         button[data-baseweb="tab"][aria-selected="true"] { background-color: #4DA6FF !important; color: #121212 !important; font-weight: bold !important; box-shadow: 0 4px 6px rgba(77, 166, 255, 0.2) !important; }
         div[data-baseweb="tab-highlight"] { display: none !important; }
-        
-        /* Inputs and Buttons */
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #4DA6FF !important; color: #121212 !important; border-color: #4DA6FF !important; font-weight: bold; }
         button[kind="primary"]:hover { background-color: #3388DD !important; border-color: #3388DD !important; }
-        
-        /* Radio Buttons (Overrides Red) */
         div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #4DA6FF !important; }
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #4DA6FF !important; }
+        div[data-baseweb="checkbox"] div:first-child { border-color: #4DA6FF !important; background-color: #4DA6FF !important; }
+        div[data-baseweb="slider"] div[role="slider"] { background-color: #4DA6FF !important; border-color: #4DA6FF !important; }
+        div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #4DA6FF !important; }
+        li[role="option"]:hover { background-color: rgba(77, 166, 255, 0.2) !important; color: #4DA6FF !important; }
+        li[role="option"][aria-selected="true"] { background-color: #4DA6FF !important; color: white !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_dark"
@@ -173,44 +166,24 @@ else:
         <style>
         .stApp { background-color: #F8F9FA; }
         h1, h2, h3 { color: #00509E !important; font-family: 'Helvetica Neue', sans-serif;}
-        
-        /* Metric Box Animation */
-        div[data-testid="stMetric"] { 
-            background: linear-gradient(145deg, #ffffff, #F0F8FF);
-            padding: 15px !important; 
-            border-radius: 12px !important;
-            border-left: 6px solid #4DA6FF !important; 
-            box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08) !important;
-            transition: transform 0.2s ease, box-shadow 0.2s ease !important;
-        }
-        div[data-testid="stMetric"]:hover {
-            transform: translateY(-5px) !important;
-            box-shadow: 0 8px 15px rgba(0, 80, 158, 0.15) !important;
-        }
-        
-        /* Streak Box Styling */
-        .streak-box { 
-            background: linear-gradient(145deg, #E6F2FF, #ffffff);
-            padding: 15px; border-radius: 12px; text-align: center; color: #00509E; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; 
-            box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08);
-            border: 1px solid #cce5ff;
-            transition: transform 0.2s ease;
-        }
+        div[data-testid="stMetric"] { background: linear-gradient(145deg, #ffffff, #F0F8FF); padding: 15px !important; border-radius: 12px !important; border-left: 6px solid #4DA6FF !important; box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08) !important; transition: transform 0.2s ease, box-shadow 0.2s ease !important; height: 100%;}
+        div[data-testid="stMetric"]:hover { transform: translateY(-5px) !important; box-shadow: 0 8px 15px rgba(0, 80, 158, 0.15) !important; }
+        .streak-box { background: linear-gradient(145deg, #E6F2FF, #ffffff); padding: 15px; border-radius: 12px; text-align: center; color: #00509E; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08); border: 1px solid #cce5ff; transition: transform 0.2s ease; }
         .streak-box:hover { transform: translateY(-3px); }
-        
-        /* Custom Blue Tabs */
         button[data-baseweb="tab"] { background-color: transparent !important; padding: 10px 20px !important; border-radius: 8px !important; margin-right: 5px !important; transition: all 0.3s ease !important; color: #555555 !important; font-weight: 600 !important; }
         button[data-baseweb="tab"]:hover { background-color: rgba(0, 80, 158, 0.05) !important; transform: translateY(-2px); color: #00509E !important;}
         button[data-baseweb="tab"][aria-selected="true"] { background-color: #00509E !important; color: white !important; box-shadow: 0 4px 6px rgba(0, 80, 158, 0.2) !important; }
         div[data-baseweb="tab-highlight"] { display: none !important; }
-        
-        /* Inputs and Buttons */
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #00509E !important; border-color: #00509E !important; }
         button[kind="primary"]:hover { background-color: #4DA6FF !important; border-color: #4DA6FF !important; color: white !important;}
-        
-        /* Radio Buttons (Overrides Red) */
         div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #00509E !important; }
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #00509E !important; }
+        div[data-baseweb="checkbox"] div:first-child { border-color: #00509E !important; background-color: #00509E !important; }
+        div[data-baseweb="slider"] div[role="slider"] { background-color: #00509E !important; border-color: #00509E !important; }
+        div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #00509E !important; }
+        li[role="option"]:hover { background-color: rgba(0, 80, 158, 0.1) !important; color: #00509E !important; }
+        li[role="option"][aria-selected="true"] { background-color: #00509E !important; color: white !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
@@ -218,14 +191,9 @@ else:
 # --- 3. LOAD CLOUD DATA (FILTERED BY USER) ---
 try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
-    
-    if 'Weight_lb' in df_all.columns:
-        df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
-        
-    if 'Weight_Timestamp' not in df_all.columns:
-        df_all['Weight_Timestamp'] = ""
-    else:
-        df_all['Weight_Timestamp'] = df_all['Weight_Timestamp'].fillna("")
+    if 'Weight_lb' in df_all.columns: df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
+    if 'Weight_Timestamp' not in df_all.columns: df_all['Weight_Timestamp'] = ""
+    else: df_all['Weight_Timestamp'] = df_all['Weight_Timestamp'].fillna("")
         
     for col in ["Weight", "Calories", "Protein_g"]:
         if col in df_all.columns:
@@ -239,16 +207,16 @@ except Exception:
     df_all = pd.DataFrame(columns=["Username", "Date", "Weight_Timestamp", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
     df = pd.DataFrame()
 
-# --- WEEKLY RECAP POP-UP (SUNDAYS) ---
-if not df.empty and pd.Timestamp.now().day_name() == "Sunday" and "recap_shown" not in st.session_state:
-    st.balloons()
-    st.toast("📅 Happy Sunday! Check your Weekly Recap below!", icon="🎉")
-    st.session_state.recap_shown = True
+# Dynamic Goal Logic for Workouts (+500 cals on workout days)
+worked_out_today = False
+if not df.empty and df.iloc[-1]['Date'].date() == date.today():
+    worked_out_today = bool(df.iloc[-1].get('Workout_Day', False))
+CALORIE_GOAL = BASE_CALORIE_GOAL + (500 if worked_out_today else 0)
 
 # --- TABS ---
-tab_dashboard, tab_log, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
+tab_dashboard, tab_log, tab_ai, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🤖 AI Coach", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
 
-# --- TAB: LOG ENTRY (SPLIT MORNING / EVENING) ---
+# --- TAB: LOG ENTRY ---
 with tab_log:
     st.header("Daily Tracking")
     log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition"])
@@ -261,24 +229,18 @@ with tab_log:
                 weight_input = st.number_input(f"Weight ({UNIT})", min_value=0.0, format="%.1f")
             
             with col_m2:
-                st.write("Time of Weigh-In")
-                t_col1, t_col2, t_col3 = st.columns([1, 1, 1])
+                st.markdown("<p style='font-size: 14px; color: #555555; margin-bottom: -15px;'>Time of Weigh-In</p>", unsafe_allow_html=True)
+                t_col1, t_sep, t_col2, t_space, t_col3 = st.columns([1, 0.1, 1, 0.2, 1.2])
                 now = datetime.now()
-                
-                with t_col1:
-                    hr = st.selectbox("Hr", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1, label_visibility="collapsed")
-                with t_col2:
-                    mn = st.selectbox("Min", [f"{i:02d}" for i in range(0, 60)], index=int(now.strftime("%M")), label_visibility="collapsed")
-                with t_col3:
-                    ampm = st.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1, label_visibility="collapsed")
-                
+                with t_col1: hr = st.selectbox("Hr", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1, label_visibility="collapsed")
+                with t_sep: st.markdown("<h2 style='text-align:center; color:#4DA6FF; margin-top:-5px;'>:</h2>", unsafe_allow_html=True)
+                with t_col2: mn = st.selectbox("Min", [f"{i:02d}" for i in range(0, 60)], index=int(now.strftime("%M")), label_visibility="collapsed")
+                with t_space: st.write("")
+                with t_col3: ampm = st.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1, label_visibility="collapsed")
                 time_str = f"{hr}:{mn} {ampm}"
             
-            submit_morning = st.form_submit_button("Save Morning Weigh-In", use_container_width=True)
-            
-            if submit_morning:
+            if st.form_submit_button("Save Morning Weigh-In", use_container_width=True):
                 entry_date_str = str(entry_date_m)
-                
                 mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
                 if not df_all[mask].empty:
                     idx = df_all[mask].index[0]
@@ -286,11 +248,9 @@ with tab_log:
                     df_all.at[idx, 'Weight_Timestamp'] = time_str
                     st.toast("Morning weigh-in updated!", icon="✅")
                 else:
-                    new_data = {"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": time_str, "Weight": weight_input, "Calories": 0, "Protein_g": 0, "Workout_Day": False, "Notes": ""}
-                    new_entry_df = pd.DataFrame([new_data])
-                    df_all = pd.concat([df_all, new_entry_df], ignore_index=True)
+                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": time_str, "Weight": weight_input, "Calories": 0, "Protein_g": 0, "Workout_Day": False, "Notes": ""}])
+                    df_all = pd.concat([df_all, new_entry], ignore_index=True)
                     st.toast("Morning weigh-in saved!", icon="🎉")
-                
                 df_upload = df_all.copy()
                 df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
                 conn.update(worksheet="Data", data=df_upload)
@@ -307,11 +267,8 @@ with tab_log:
                 workout_day = st.checkbox("Did you workout today?")
                 notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
             
-            submit_evening = st.form_submit_button("Save Evening Nutrition", use_container_width=True)
-            
-            if submit_evening:
+            if st.form_submit_button("Save Evening Nutrition", use_container_width=True):
                 entry_date_str = str(entry_date_e)
-                
                 mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
                 if not df_all[mask].empty:
                     idx = df_all[mask].index[0]
@@ -321,11 +278,9 @@ with tab_log:
                     df_all.at[idx, 'Notes'] = notes_input
                     st.toast("Evening nutrition updated!", icon="✅")
                 else:
-                    new_data = {"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}
-                    new_entry_df = pd.DataFrame([new_data])
-                    df_all = pd.concat([df_all, new_entry_df], ignore_index=True)
-                    st.toast("Evening nutrition saved (No weight logged yet)!", icon="🎉")
-                
+                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}])
+                    df_all = pd.concat([df_all, new_entry], ignore_index=True)
+                    st.toast("Evening nutrition saved!", icon="🎉")
                 df_upload = df_all.copy()
                 df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
                 conn.update(worksheet="Data", data=df_upload)
@@ -357,47 +312,27 @@ with tab_dashboard:
                 streak = 1
                 for i in range(1, len(df_desc)):
                     gap = (df_desc.loc[i-1, 'Date'] - df_desc.loc[i, 'Date']).days
-                    if gap == 1:
-                        streak += 1
-                    elif gap == 2 and freezes_used < freezes_earned:
-                        streak += 1 
-                        freezes_used += 1
-                    else:
-                        break
+                    if gap == 1: streak += 1
+                    elif gap == 2 and freezes_used < freezes_earned: streak += 1; freezes_used += 1
+                    else: break
                         
         freezes_left = freezes_earned - freezes_used
         if streak > 0:
             freeze_text = f" (🧊 {freezes_left} Freezes Available)" if freezes_left > 0 else ""
             st.markdown(f"<div class='streak-box'>🔥 You are on a {streak}-day logging streak!{freeze_text}</div>", unsafe_allow_html=True)
         
-        if "recap_shown" in st.session_state and pd.Timestamp.now().day_name() == "Sunday":
-            with st.expander("✨ Your Weekly Recap (Sunday Special!)", expanded=True):
-                st.write(f"**Great job this week!** You protected your streak ({streak} days).")
-                st.write(f"Total weight lost since you started: **{total_lost:.1f} {UNIT}**.")
-
+        # --- EVEN BOXES FIX (Invisible Deltas) ---
         col1, col2, col3, col4 = st.columns(4)
         col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", delta=f"{weight_delta:+.1f} {UNIT}" if weight_delta != 0 else None, delta_color="inverse", help=f"Last logged{time_display}")
-        col2.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}")
-        col3.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}")
-        col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal")
+        col2.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}", delta=" ", delta_color="off")
+        col3.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}", delta=" ", delta_color="off")
+        col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal", delta=" ", delta_color="off")
         
         st.markdown("### 🎁 Next Reward Tracker")
         if st.session_state.username.lower() == "yani":
-            rewards = [
-                (181.9, "Video game", f"-20 {UNIT}"), (176.9, "New gym shirt(s)", f"-25 {UNIT}"),
-                (171.9, "Arcade trip", f"-30 {UNIT}"), (166.9, "New hat", f"-35 {UNIT}"),
-                (161.9, "Bowling trip", f"-40 {UNIT}"), (156.9, "New gym pants", f"-45 {UNIT}"),
-                (151.9, "Nose piercing", f"-50 {UNIT}"), (146.9, "New shoes", f"-55 {UNIT}"),
-                (141.9, "Cheat day", f"-60 {UNIT}")
-            ]
+            rewards = [(181.9, "Video game", f"-20 {UNIT}"), (176.9, "New gym shirt(s)", f"-25 {UNIT}"), (171.9, "Arcade trip", f"-30 {UNIT}"), (166.9, "New hat", f"-35 {UNIT}"), (161.9, "Bowling trip", f"-40 {UNIT}"), (156.9, "New gym pants", f"-45 {UNIT}"), (151.9, "Nose piercing", f"-50 {UNIT}"), (146.9, "New shoes", f"-55 {UNIT}"), (141.9, "Cheat day", f"-60 {UNIT}")]
         else:
-            rewards = [
-                (first_weight - 5, "Level 1 Milestone", f"-5 {UNIT}"),
-                (first_weight - 10, "Level 2 Milestone", f"-10 {UNIT}"),
-                (first_weight - 15, "Level 3 Milestone", f"-15 {UNIT}"),
-                (first_weight - 20, "Level 4 Milestone", f"-20 {UNIT}"),
-                (first_weight - 25, "Level 5 Milestone", f"-25 {UNIT}")
-            ]
+            rewards = [(first_weight - 5, "Level 1 Milestone", f"-5 {UNIT}"), (first_weight - 10, "Level 2 Milestone", f"-10 {UNIT}"), (first_weight - 15, "Level 3 Milestone", f"-15 {UNIT}"), (first_weight - 20, "Level 4 Milestone", f"-20 {UNIT}"), (first_weight - 25, "Level 5 Milestone", f"-25 {UNIT}")]
         
         next_reward = None
         previous_target = first_weight
@@ -409,35 +344,32 @@ with tab_dashboard:
             
         if next_reward:
             target_wt, reward_name, label, start_wt = next_reward
-            progress_val = (start_wt - current_weight) / (start_wt - target_wt)
-            progress_val = max(0.0, min(1.0, progress_val)) 
-            amount_to_go = current_weight - target_wt
-            st.write(f"**Next Unlock:** {reward_name} ({label}) — *Only {amount_to_go:.1f} {UNIT} to go!*")
+            progress_val = max(0.0, min(1.0, (start_wt - current_weight) / (start_wt - target_wt))) 
+            st.write(f"**Next Unlock:** {reward_name} ({label}) — *Only {(current_weight - target_wt):.1f} {UNIT} to go!*")
             st.progress(progress_val)
         else:
             st.success("🎉 You have unlocked EVERY reward on your roadmap!")
 
         st.markdown("<hr>", unsafe_allow_html=True)
         
-        st.write("### 📅 Timeframe Filter")
         time_filter = st.radio("Select range to view:", ["Last 7 Days", "Last 14 Days", "Last 30 Days", "All Time"], horizontal=True, label_visibility="collapsed")
-        
         df_filtered = df.copy()
         now = pd.Timestamp.now().normalize()
         
         if time_filter == "Last 7 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=7))]
         elif time_filter == "Last 14 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=14))]
         elif time_filter == "Last 30 Days": df_filtered = df[df['Date'] >= (now - pd.Timedelta(days=30))]
+        if df_filtered.empty: df_filtered = df.copy()
 
-        if df_filtered.empty:
-            df_filtered = df.copy()
-
-        current_deficit = 0
+        # DYNAMIC TDEE SYSTEM
         if len(df) >= 14:
             weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
             avg_cals = df['Calories'].mean()
             est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
-            current_deficit = est_tdee - CALORIE_GOAL
+        else:
+            est_tdee = AI_TDEE
+
+        current_deficit = est_tdee - CALORIE_GOAL
 
         st.subheader("Weight Trend & Goal Forecast")
         fig_weight = go.Figure()
@@ -455,11 +387,10 @@ with tab_dashboard:
 
         st.subheader("Nutrition Insights")
         chart_col1, chart_col2 = st.columns([2, 1])
-        
         with chart_col1:
             fig_nut = go.Figure()
             fig_nut.add_trace(go.Bar(x=df_filtered['Date'], y=df_filtered['Calories'], name='Calories', marker_color='#4DA6FF'))
-            fig_nut.add_hline(y=CALORIE_GOAL, line_dash="dash", line_color="#FF0000", annotation_text="Calorie Target")
+            fig_nut.add_hline(y=CALORIE_GOAL, line_dash="dash", line_color="#FF0000", annotation_text=f"Target ({CALORIE_GOAL} kcal)")
             fig_nut.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['Protein_g'], name='Protein (g)', mode='lines+markers', line=dict(color='#FF9900', width=3), yaxis='y2'))
             fig_nut.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", yaxis=dict(title="Calories"), yaxis2=dict(title="Protein (g)", overlaying="y", side="right", showgrid=False), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), template=theme_template)
             st.plotly_chart(fig_nut, use_container_width=True)
@@ -472,20 +403,6 @@ with tab_dashboard:
             fig_pie.update_layout(margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5), template=theme_template)
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        if len(df) >= 14:
-            st.subheader("⚖️ Deficit vs. Reality")
-            df_chart = df_filtered.copy()
-            start_wt_chart = df_chart.iloc[0]['Weight']
-            df_chart['Daily_Deficit'] = est_tdee - df_chart['Calories']
-            df_chart['Cumulative_Deficit'] = df_chart['Daily_Deficit'].cumsum()
-            df_chart['Expected_Weight'] = start_wt_chart - (df_chart['Cumulative_Deficit'] / CALS_PER_UNIT)
-            
-            fig_def = go.Figure()
-            fig_def.add_trace(go.Scatter(x=df_chart['Date'], y=df_chart['Expected_Weight'], mode='lines', name='Math Expectation', line=dict(color='#80BFFF', dash='dot')))
-            fig_def.add_trace(go.Scatter(x=df_chart['Date'], y=df_chart['7-Day Avg'], mode='lines', name='Actual Trend', line=dict(color='#FF9900', width=3)))
-            fig_def.update_layout(margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template=theme_template)
-            st.plotly_chart(fig_def, use_container_width=True)
-
         col_dow, col_scatter = st.columns(2)
         with col_dow:
             st.subheader("📅 Day-of-Week Trends")
@@ -507,16 +424,61 @@ with tab_dashboard:
     else:
         st.info("No data yet. Head over to the 'Log Entry' tab!")
 
+# --- TAB: AI COACH ---
+with tab_ai:
+    st.header("🤖 AI TDEE & Fitness Coach")
+    st.write("Describe your day (e.g., 'I walked 10k steps and lifted weights for 45 mins') and the AI will estimate your TDEE and adjust your charts dynamically.")
+    
+    if model is None:
+        st.error("⚠️ Please add `gemini_api_key = '...'` to your Streamlit secrets to activate the AI Coach.")
+    else:
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+            
+        for msg in st.session_state.chat_history:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                
+        user_input = st.chat_input("Tell me about your activity level today...")
+        if user_input:
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+                
+            sys_prompt = f"""You are an advanced fitness AI coach for {st.session_state.username}.
+            Current User Stats: Age: {AGE}, Height: {HEIGHT} {UNIT}, Current Weight: {current_weight if not df.empty else 0} {UNIT}, Body Fat: {BF_PCT}%.
+            Your job is to chat with the user, evaluate their daily activity, and estimate their Total Daily Energy Expenditure (TDEE).
+            If you calculate a new TDEE, you MUST include the exact text 'NEW_TDEE: [number]' at the very end of your response so the system can read it.
+            CRITICAL PROTOCOL: If the user ever mentions the urge to binge or overeat, you must drop everything and do whatever it takes to stop them. Be fiercely supportive, firm, and provide immediate redirection/distraction techniques to break the cycle.
+            """
+            
+            with st.chat_message("assistant"):
+                response = model.generate_content([sys_prompt, user_input])
+                bot_reply = response.text
+                
+                # Check if AI updated the TDEE
+                match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
+                if match:
+                    new_tdee_val = float(match.group(1))
+                    
+                    # Clean the raw code out of the display text
+                    bot_reply = re.sub(r'NEW_TDEE:\s*\d+', '', bot_reply).strip()
+                    
+                    # Update Cloud Settings
+                    s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
+                    s_df.loc[s_df['Username'] == st.session_state.username, 'ai_tdee'] = new_tdee_val
+                    conn.update(worksheet="Settings", data=s_df)
+                    st.toast(f"TDEE Automatically Updated to {new_tdee_val} kcal!", icon="⚙️")
+                    st.cache_data.clear()
+                    
+                st.markdown(bot_reply)
+                st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
+
 # --- TAB: SIMULATOR ---
 with tab_sim:
     st.header("🔮 'What-If' Simulator")
-    st.write("Play with the numbers to see how your future changes.")
-    if not df.empty and len(df) >= 14:
-        weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
-        avg_cals = df['Calories'].mean()
-        est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
-
-        sim_cals = st.slider("If I eat this many calories a day...", min_value=1200, max_value=3000, value=CALORIE_GOAL, step=50)
+    if not df.empty:
+        sim_cals = st.slider("If I eat this many calories a day...", min_value=1200, max_value=3500, value=CALORIE_GOAL, step=50)
         sim_days = st.slider("For this many days...", min_value=7, max_value=90, value=30, step=7)
         
         daily_deficit = est_tdee - sim_cals
@@ -527,106 +489,49 @@ with tab_sim:
             st.success(f"In {sim_days} days, you would lose **{sim_weight_lost:.1f} {UNIT}**, weighing exactly **{sim_final_weight:.1f} {UNIT}**!")
         else:
             st.warning(f"At {sim_cals} calories, you would gain **{abs(sim_weight_lost):.1f} {UNIT}**, weighing **{sim_final_weight:.1f} {UNIT}**.")
-    else:
-        st.info("Log 14 days of data to unlock the simulator (it needs your metabolism data first).")
 
 # --- TAB: EDIT HISTORY & NOTES ---
 with tab_data:
     st.header("Manage Cloud Data")
-    
-    st.subheader("📤 Import Old Local Data")
-    st.write("Upload your old `my_tracking_data.csv` file from your PC to merge it into the cloud database.")
-    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
-    
-    if uploaded_file is not None:
-        if st.button("Merge Data to Cloud", type="primary"):
-            old_df = pd.read_csv(uploaded_file)
-            
-            if 'Weight_lb' in old_df.columns:
-                old_df.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
-            if 'Weight_Timestamp' not in old_df.columns:
-                old_df['Weight_Timestamp'] = ""
-            for col in ['Protein_g', 'Workout_Day']:
-                if col not in old_df.columns:
-                    old_df[col] = 0 if col == 'Protein_g' else False
-            if 'Notes' not in old_df.columns: 
-                old_df['Notes'] = ""
-            
-            old_df['Username'] = st.session_state.username
-            
-            old_df['Date'] = pd.to_datetime(old_df['Date'], errors='coerce')
-            old_df = old_df.dropna(subset=['Date'])
-            
-            for col in ["Weight", "Calories", "Protein_g"]:
-                old_df[col] = pd.to_numeric(old_df[col], errors='coerce')
-            
-            combined_df = pd.concat([df_all, old_df]).drop_duplicates(subset=['Username', 'Date'], keep='last')
-            combined_df['Date'] = pd.to_datetime(combined_df['Date'])
-            combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
-            
-            upload_df = combined_df.copy()
-            upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
-            conn.update(worksheet="Data", data=upload_df)
-            
-            st.success("Your old data was successfully merged into the cloud! Your streak is restored.")
-            st.cache_data.clear()
-            st.rerun()
-            
-    st.markdown("<hr>", unsafe_allow_html=True)
     st.write("**Manual Editor:** Double-click a cell below to edit it directly.")
-    
     if not df.empty:
         df_edit = df.copy()
-        df_edit['Date'] = pd.to_datetime(df_edit['Date'])
-        df_edit['Date'] = df_edit['Date'].dt.strftime('%Y-%m-%d')
+        df_edit['Date'] = pd.to_datetime(df_edit['Date']).dt.strftime('%Y-%m-%d')
         edited_df = st.data_editor(df_edit.sort_values(by='Date', ascending=False), num_rows="dynamic", use_container_width=True)
         if st.button("💾 Save Edits to Cloud", type="primary"):
             edited_df = edited_df.dropna(subset=['Date', 'Weight'])
-            
             df_all_others = df_all[df_all['Username'] != st.session_state.username]
             new_df_all = pd.concat([df_all_others, edited_df])
             new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
-            
             conn.update(worksheet="Data", data=new_df_all)
             st.success("Cloud database updated!")
             st.rerun()
 
 # --- TAB: GOALS & SETTINGS ---
 with tab_settings:
-    st.header("⚙️ Cloud Settings")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: new_cal = st.number_input("Daily Calorie Goal", value=CALORIE_GOAL, step=50)
-    with col2: new_weight = st.number_input(f"Goal Weight ({UNIT})", value=GOAL_WEIGHT, format="%.1f")
-    with col3: new_unit = st.selectbox("Preferred Unit", ["lb", "kg"], index=0 if UNIT == "lb" else 1)
-    with col4: 
-        st.write("UI Theme")
-        new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
+    st.header("⚙️ Cloud Settings & Profile")
+    st.write("Fill these out so the AI Coach can accurately model your TDEE and metabolism.")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1: 
+        new_cal = st.number_input("Base Calorie Goal", value=BASE_CALORIE_GOAL, step=50)
+        new_age = st.number_input("Age", value=AGE, step=1)
+    with col2: 
+        new_weight = st.number_input(f"Goal Weight ({UNIT})", value=GOAL_WEIGHT, format="%.1f")
+        new_height = st.number_input(f"Total Height ({'inches' if UNIT == 'lb' else 'cm'})", value=HEIGHT, format="%.1f")
+    with col3: 
+        new_unit = st.selectbox("Preferred Unit", ["lb", "kg"], index=0 if UNIT == "lb" else 1)
+        new_bf = st.number_input("Body Fat % (Optional)", value=BF_PCT, format="%.1f")
+        
+    new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
         
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         s_df_others = s_df[s_df['Username'] != st.session_state.username]
-        new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit}])
+        new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": AI_TDEE}])
         updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
         
         conn.update(worksheet="Settings", data=updated_s_df)
-        st.success("Cloud settings updated! Please wait a few seconds and refresh to see changes.")
+        st.success("Cloud settings updated!")
         st.cache_data.clear()
         st.rerun()
-        
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.subheader("📄 Generate PDF Report")
-    if st.button("Generate Monthly PDF") and not df.empty:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(200, 10, txt=f"{st.session_state.username}'s Health Report", ln=True, align='C')
-        pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt=f"Generated on: {date.today()}", ln=True, align='C')
-        pdf.ln(10)
-        pdf.set_font("Arial", 'B', 14)
-        pdf.cell(200, 10, txt="Core Metrics:", ln=True)
-        pdf.set_font("Arial", size=12)
-        pdf.cell(200, 10, txt=f"- Starting Weight: {df.iloc[0]['Weight']} {UNIT}", ln=True)
-        pdf.cell(200, 10, txt=f"- Current Weight: {df.iloc[-1]['Weight']} {UNIT}", ln=True)
-        pdf.cell(200, 10, txt=f"- Total Lost: {df.iloc[0]['Weight'] - df.iloc[-1]['Weight']:.1f} {UNIT}", ln=True)
-        st.download_button(label="Download PDF Report", data=pdf.output(dest='S').encode('latin-1'), file_name=f"{st.session_state.username}_health_report.pdf", mime="application/pdf", type="primary")
