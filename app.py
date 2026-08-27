@@ -9,6 +9,28 @@ from streamlit_gsheets import GSheetsConnection
 # --- 1. UI & STATE CONFIGURATION ---
 st.set_page_config(page_title="Health Tracker", layout="wide")
 
+# --- 2. SECURE LOGIN SYSTEM ---
+# Pulls the password from your Streamlit Secrets. Defaults to "admin" if you haven't set it yet.
+EXPECTED_PASSWORD = st.secrets.get("app_password", "admin")
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    st.title("🔒 Private Health Dashboard")
+    st.write("Please enter your password to access your data.")
+    
+    pwd = st.text_input("Password", type="password")
+    if st.button("Login", type="primary"):
+        if pwd == EXPECTED_PASSWORD:
+            st.session_state.logged_in = True
+            st.rerun()
+        else:
+            st.error("Incorrect password. Please try again.")
+    st.stop() # This completely halts the app until logged in!
+
+# --- (APP CONTINUES BELOW IF LOGGED IN) ---
+
 if "celebrated_today" not in st.session_state:
     st.session_state.celebrated_today = False
 if "goal_celebrated" not in st.session_state:
@@ -57,10 +79,10 @@ else:
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
 
-# --- 2. LOAD DATA FROM CLOUD ---
+# --- 3. LOAD DATA FROM CLOUD ---
 try:
     df = conn.read(worksheet="Data", ttl=0)
-    df = df.dropna(how="all") # Clean empty rows
+    df = df.dropna(how="all") 
     if not df.empty:
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values(by='Date').reset_index(drop=True)
@@ -74,7 +96,7 @@ if not df.empty and pd.Timestamp.now().day_name() == "Sunday" and "recap_shown" 
     st.session_state.recap_shown = True
 
 # --- TABS ---
-tab_dashboard, tab_log, tab_games, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🎮 Mini-Games & Sims", "📁 Edit History", "⚙️ Settings"])
+tab_dashboard, tab_log, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
 
 # --- TAB: LOG ENTRY ---
 with tab_log:
@@ -108,7 +130,6 @@ with tab_log:
                 df = pd.concat([df, new_entry_df], ignore_index=True)
                 st.toast("New entry saved to Cloud!", icon="🎉")
             
-            # Format dates back to string for Google Sheets compatibility
             df_upload = df.copy()
             df_upload['Date'] = df_upload['Date'].dt.strftime('%Y-%m-%d')
             conn.update(worksheet="Data", data=df_upload)
@@ -251,9 +272,10 @@ with tab_dashboard:
         if len(df) >= 14:
             st.subheader("⚖️ Deficit vs. Reality")
             df_chart = df_filtered.copy()
+            start_wt_chart = df_chart.iloc[0]['Weight_lb']
             df_chart['Daily_Deficit'] = est_tdee - df_chart['Calories']
             df_chart['Cumulative_Deficit'] = df_chart['Daily_Deficit'].cumsum()
-            df_chart['Expected_Weight'] = df_chart.iloc[0]['Weight_lb'] - (df_chart['Cumulative_Deficit'] / 3500)
+            df_chart['Expected_Weight'] = start_wt_chart - (df_chart['Cumulative_Deficit'] / 3500)
             
             fig_def = go.Figure()
             fig_def.add_trace(go.Scatter(x=df_chart['Date'], y=df_chart['Expected_Weight'], mode='lines', name='Math Expectation', line=dict(color='#80BFFF', dash='dot')))
@@ -282,39 +304,70 @@ with tab_dashboard:
     else:
         st.info("No data yet. Head over to the 'Log Entry' tab!")
 
-# --- TAB: MINI-GAMES ---
-with tab_games:
-    st.header("🎮 Gamify Your Journey")
-    
-    st.subheader("🎯 Habit Bingo ($5 Treat Engine)")
-    try:
-        b_df = conn.read(worksheet="Bingo", ttl=0)
-        bingo_state = {str(k): bool(v) for k, v in b_df.iloc[0].to_dict().items()}
-    except Exception:
-        bingo_state = {str(i): False for i in range(9)}
+# --- TAB: SIMULATOR ---
+with tab_sim:
+    st.header("🔮 'What-If' Simulator")
+    st.write("Play with the numbers to see how your future changes.")
+    if not df.empty and len(df) >= 14:
+        weight_diff = df.iloc[0]['Weight_lb'] - df.iloc[-1]['Weight_lb']
+        avg_cals = df['Calories'].mean()
+        est_tdee = avg_cals + ((weight_diff * 3500) / len(df))
+
+        sim_cals = st.slider("If I eat this many calories a day...", min_value=1200, max_value=3000, value=CALORIE_GOAL, step=50)
+        sim_days = st.slider("For this many days...", min_value=7, max_value=90, value=30, step=7)
         
-    habits = ["Hit Calorie Goal", "Hit Protein Goal", "Walk 15 Mins", "Drink 80oz Water", "Log a Workout", "Get 7+ Hrs Sleep", "Survived an Urge", "Ate a Vegetable", "No Late Snacks"]
-    
-    b_cols = st.columns(3)
-    new_state = {}
-    for i in range(9):
-        col = b_cols[i % 3]
-        new_state[str(i)] = col.checkbox(habits[i], value=bingo_state.get(str(i), False), key=f"bingo_{i}")
+        daily_deficit = est_tdee - sim_cals
+        sim_weight_lost = (daily_deficit * sim_days) / 3500
+        sim_final_weight = df.iloc[-1]['Weight_lb'] - sim_weight_lost
         
-    if st.button("Save Bingo Board to Cloud"):
-        new_b_df = pd.DataFrame([new_state])
-        conn.update(worksheet="Bingo", data=new_b_df)
-        if all(new_state.values()):
-            st.balloons()
-            st.success("🎉 BINGO! You crushed your habits. Go enjoy your $5 treat (Ice Cream time!) 🍦")
-            conn.update(worksheet="Bingo", data=pd.DataFrame([{str(i): False for i in range(9)}]))
+        if sim_weight_lost > 0:
+            st.success(f"In {sim_days} days, you would lose **{sim_weight_lost:.1f} lbs**, weighing exactly **{sim_final_weight:.1f} lbs**!")
         else:
-            st.toast("Cloud board saved!")
-            st.rerun()
+            st.warning(f"At {sim_cals} calories, you would gain **{abs(sim_weight_lost):.1f} lbs**, weighing **{sim_final_weight:.1f} lbs**.")
+    else:
+        st.info("Log 14 days of data to unlock the simulator (it needs your metabolism data first).")
 
 # --- TAB: EDIT HISTORY & NOTES ---
 with tab_data:
     st.header("Manage Cloud Data")
+    
+    # --- NEW CSV IMPORT TOOL ---
+    st.subheader("📤 Import Old Local Data")
+    st.write("Upload your old `my_tracking_data.csv` file from your PC to merge it into the cloud database.")
+    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
+    
+    if uploaded_file is not None:
+        if st.button("Merge Data to Cloud", type="primary"):
+            old_df = pd.read_csv(uploaded_file)
+            
+            # Clean up old data to match new format
+            if 'Weight' in old_df.columns:
+                old_df['Weight_lb'] = old_df['Weight_lb'].fillna(old_df['Weight']) if 'Weight_lb' in old_df.columns else old_df['Weight']
+                old_df = old_df.drop(columns=['Weight'])
+            for col in ['Protein_g', 'Workout_Day']:
+                if col not in old_df.columns:
+                    old_df[col] = 0 if col == 'Protein_g' else False
+            if 'Notes' not in old_df.columns: 
+                old_df['Notes'] = ""
+            
+            old_df['Date'] = pd.to_datetime(old_df['Date'])
+            
+            # Combine current cloud data with uploaded data, removing duplicates based on Date
+            combined_df = pd.concat([df, old_df]).drop_duplicates(subset=['Date'], keep='last')
+            combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
+            
+            # Format back to string and push to cloud
+            upload_df = combined_df.copy()
+            upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
+            conn.update(worksheet="Data", data=upload_df)
+            
+            st.success("Your old data was successfully merged into the cloud! Your streak is restored.")
+            st.cache_data.clear()
+            st.rerun()
+            
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.write("**Manual Editor:** Double-click a cell below to edit it directly.")
+    
     if not df.empty:
         df_edit = df.copy()
         df_edit['Date'] = df_edit['Date'].dt.strftime('%Y-%m-%d')
