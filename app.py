@@ -8,6 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 import hashlib
 import google.generativeai as genai
 import re
+from PIL import Image
 
 # --- HELPER FUNCTION: PASSWORD ENCRYPTION ---
 def make_hash(password):
@@ -80,7 +81,7 @@ if not st.session_state.logged_in:
                     s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit", "age", "height", "bf_pct", "ai_tdee"])
                     
                 default_goal = 150.0 if new_unit == "lb" else 70.0
-                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 2000, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 20.0, "ai_tdee": 2000}])
+                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 1900, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 20.0, "ai_tdee": 2000}])
                 s_df = pd.concat([s_df, new_s_df], ignore_index=True)
                 conn.update(worksheet="Settings", data=s_df)
                 
@@ -148,7 +149,7 @@ if DARK_MODE:
         button[data-baseweb="tab"]:hover { background-color: rgba(77, 166, 255, 0.15) !important; transform: translateY(-2px); color: #4DA6FF !important; }
         button[data-baseweb="tab"][aria-selected="true"] { background-color: #4DA6FF !important; color: #121212 !important; font-weight: bold !important; box-shadow: 0 4px 6px rgba(77, 166, 255, 0.2) !important; }
         div[data-baseweb="tab-highlight"] { display: none !important; }
-        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
+        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #4DA6FF !important; color: #121212 !important; border-color: #4DA6FF !important; font-weight: bold; }
         button[kind="primary"]:hover { background-color: #3388DD !important; border-color: #3388DD !important; }
         div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #4DA6FF !important; }
@@ -174,7 +175,7 @@ else:
         button[data-baseweb="tab"]:hover { background-color: rgba(0, 80, 158, 0.05) !important; transform: translateY(-2px); color: #00509E !important;}
         button[data-baseweb="tab"][aria-selected="true"] { background-color: #00509E !important; color: white !important; box-shadow: 0 4px 6px rgba(0, 80, 158, 0.2) !important; }
         div[data-baseweb="tab-highlight"] { display: none !important; }
-        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
+        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #00509E !important; border-color: #00509E !important; }
         button[kind="primary"]:hover { background-color: #4DA6FF !important; border-color: #4DA6FF !important; color: white !important;}
         div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #00509E !important; }
@@ -321,7 +322,6 @@ with tab_dashboard:
             freeze_text = f" (🧊 {freezes_left} Freezes Available)" if freezes_left > 0 else ""
             st.markdown(f"<div class='streak-box'>🔥 You are on a {streak}-day logging streak!{freeze_text}</div>", unsafe_allow_html=True)
         
-        # --- EVEN BOXES FIX (Invisible Deltas) ---
         col1, col2, col3, col4 = st.columns(4)
         col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", delta=f"{weight_delta:+.1f} {UNIT}" if weight_delta != 0 else None, delta_color="inverse", help=f"Last logged{time_display}")
         col2.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}", delta=" ", delta_color="off")
@@ -424,55 +424,88 @@ with tab_dashboard:
     else:
         st.info("No data yet. Head over to the 'Log Entry' tab!")
 
-# --- TAB: AI COACH ---
+
+# --- TAB: AI COACH (WIX-STYLE CHAT LAYOUT) ---
 with tab_ai:
     st.header("🤖 AI TDEE & Fitness Coach")
-    st.write("Describe your day (e.g., 'I walked 10k steps and lifted weights for 45 mins') and the AI will estimate your TDEE and adjust your charts dynamically.")
     
     if model is None:
         st.error("⚠️ Please add `gemini_api_key = '...'` to your Streamlit secrets to activate the AI Coach.")
     else:
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
+        # Layout columns to match image (Chat on left, Profile on right)
+        chat_col, profile_col = st.columns([2.5, 1])
+        
+        with profile_col:
+            st.markdown("### 👤 User Profile")
+            st.markdown(f"**Current Weight:** {current_weight if not df.empty else 0:.1f} {UNIT}")
+            st.markdown(f"**Goal Weight:** {GOAL_WEIGHT:.1f} {UNIT}")
+            st.markdown(f"**Height:** {HEIGHT} {'inches' if UNIT == 'lb' else 'cm'}")
+            st.markdown(f"**Age:** {AGE}")
+            st.markdown(f"**Body Fat:** {BF_PCT}%")
+            st.markdown(f"**Current Est. TDEE:** <span style='color:#4DA6FF; font-weight:bold; font-size:1.1rem;'>{AI_TDEE} kcal</span>", unsafe_allow_html=True)
+            st.info("💡 Tell the AI your typical weekly routine here. It will calculate your baseline TDEE and save it permanently.")
             
-        for msg in st.session_state.chat_history:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                
-        user_input = st.chat_input("Tell me about your activity level today...")
-        if user_input:
-            st.session_state.chat_history.append({"role": "user", "content": user_input})
-            with st.chat_message("user"):
-                st.markdown(user_input)
-                
-            sys_prompt = f"""You are an advanced fitness AI coach for {st.session_state.username}.
-            Current User Stats: Age: {AGE}, Height: {HEIGHT} {UNIT}, Current Weight: {current_weight if not df.empty else 0} {UNIT}, Body Fat: {BF_PCT}%.
-            Your job is to chat with the user, evaluate their daily activity, and estimate their Total Daily Energy Expenditure (TDEE).
-            If you calculate a new TDEE, you MUST include the exact text 'NEW_TDEE: [number]' at the very end of your response so the system can read it.
-            CRITICAL PROTOCOL: If the user ever mentions the urge to binge or overeat, you must drop everything and do whatever it takes to stop them. Be fiercely supportive, firm, and provide immediate redirection/distraction techniques to break the cycle.
-            """
+        with chat_col:
+            img_file = st.file_uploader("📸 Upload Image (Optional: e.g. treadmill results)", type=['png', 'jpg', 'jpeg'])
             
-            with st.chat_message("assistant"):
-                response = model.generate_content([sys_prompt, user_input])
-                bot_reply = response.text
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = []
                 
-                # Check if AI updated the TDEE
-                match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
-                if match:
-                    new_tdee_val = float(match.group(1))
+            # Restrict chat to a scrollable box
+            chat_container = st.container(height=500)
+            
+            with chat_container:
+                for msg in st.session_state.chat_history:
+                    with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🤖"):
+                        st.markdown(msg["content"])
+                        if "image" in msg and msg["image"] is not None:
+                            st.image(msg["image"], width=250)
+                            
+            user_input = st.chat_input("Describe your baseline weekly routine (e.g., 'I run Mon/Wed, lift Tue/Thu')...")
+            
+            if user_input:
+                img = None
+                if img_file:
+                    img = Image.open(img_file)
+                
+                st.session_state.chat_history.append({"role": "user", "content": user_input, "image": img})
+                
+                with chat_container:
+                    with st.chat_message("user", avatar="👤"):
+                        st.markdown(user_input)
+                        if img:
+                            st.image(img, width=250)
+                            
+                    sys_prompt = f"""You are an advanced fitness AI coach for {st.session_state.username}.
+                    Current User Stats: Age: {AGE}, Height: {HEIGHT} {UNIT}, Current Weight: {current_weight if not df.empty else 0} {UNIT}, Body Fat: {BF_PCT}%.
+                    Your job is to chat with the user, evaluate their overall WEEKLY routine (not just daily), and calculate a baseline Total Daily Energy Expenditure (TDEE).
+                    If they upload an image (like a cardio machine summary), read the metrics from it to help assess their expenditure.
+                    Note: The user raises their base to 1,900 calories on week 5, and the extra 500 on workout days is specifically consumed before and after workouts. Keep this in mind when making calorie suggestions.
+                    If you calculate a NEW baseline TDEE, you MUST include the exact text 'NEW_TDEE: [number]' at the very end of your response so the system can read it.
+                    CRITICAL PROTOCOL: If the user ever mentions the urge to binge or overeat, you must drop everything and do whatever it takes to stop them. Be fiercely supportive, firm, and provide immediate redirection/distraction techniques to break the cycle.
+                    """
                     
-                    # Clean the raw code out of the display text
-                    bot_reply = re.sub(r'NEW_TDEE:\s*\d+', '', bot_reply).strip()
-                    
-                    # Update Cloud Settings
-                    s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-                    s_df.loc[s_df['Username'] == st.session_state.username, 'ai_tdee'] = new_tdee_val
-                    conn.update(worksheet="Settings", data=s_df)
-                    st.toast(f"TDEE Automatically Updated to {new_tdee_val} kcal!", icon="⚙️")
-                    st.cache_data.clear()
-                    
-                st.markdown(bot_reply)
-                st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
+                    with st.chat_message("assistant", avatar="🤖"):
+                        api_contents = [sys_prompt, user_input]
+                        if img:
+                            api_contents.append(img)
+                            
+                        response = model.generate_content(api_contents)
+                        bot_reply = response.text
+                        
+                        match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
+                        if match:
+                            new_tdee_val = float(match.group(1))
+                            bot_reply = re.sub(r'NEW_TDEE:\s*\d+', '', bot_reply).strip()
+                            s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
+                            s_df.loc[s_df['Username'] == st.session_state.username, 'ai_tdee'] = new_tdee_val
+                            conn.update(worksheet="Settings", data=s_df)
+                            st.toast(f"Weekly Baseline TDEE Updated to {new_tdee_val} kcal!", icon="⚙️")
+                            st.cache_data.clear()
+                            
+                        st.markdown(bot_reply)
+                        st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
+
 
 # --- TAB: SIMULATOR ---
 with tab_sim:
