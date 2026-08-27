@@ -10,7 +10,6 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Health Tracker", layout="wide")
 
 # --- 2. SECURE LOGIN SYSTEM ---
-# Pulls the password from your Streamlit Secrets. Defaults to "admin" if you haven't set it yet.
 EXPECTED_PASSWORD = st.secrets.get("app_password", "admin")
 
 if "logged_in" not in st.session_state:
@@ -27,7 +26,7 @@ if not st.session_state.logged_in:
             st.rerun()
         else:
             st.error("Incorrect password. Please try again.")
-    st.stop() # This completely halts the app until logged in!
+    st.stop()
 
 # --- (APP CONTINUES BELOW IF LOGGED IN) ---
 
@@ -131,6 +130,7 @@ with tab_log:
                 st.toast("New entry saved to Cloud!", icon="🎉")
             
             df_upload = df.copy()
+            df_upload['Date'] = pd.to_datetime(df_upload['Date'])
             df_upload['Date'] = df_upload['Date'].dt.strftime('%Y-%m-%d')
             conn.update(worksheet="Data", data=df_upload)
             st.rerun()
@@ -331,7 +331,7 @@ with tab_sim:
 with tab_data:
     st.header("Manage Cloud Data")
     
-    # --- NEW CSV IMPORT TOOL ---
+    # --- FIXED CSV IMPORT TOOL ---
     st.subheader("📤 Import Old Local Data")
     st.write("Upload your old `my_tracking_data.csv` file from your PC to merge it into the cloud database.")
     uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
@@ -340,7 +340,6 @@ with tab_data:
         if st.button("Merge Data to Cloud", type="primary"):
             old_df = pd.read_csv(uploaded_file)
             
-            # Clean up old data to match new format
             if 'Weight' in old_df.columns:
                 old_df['Weight_lb'] = old_df['Weight_lb'].fillna(old_df['Weight']) if 'Weight_lb' in old_df.columns else old_df['Weight']
                 old_df = old_df.drop(columns=['Weight'])
@@ -350,14 +349,18 @@ with tab_data:
             if 'Notes' not in old_df.columns: 
                 old_df['Notes'] = ""
             
-            old_df['Date'] = pd.to_datetime(old_df['Date'])
+            # Safely coerce the incoming dates
+            old_df['Date'] = pd.to_datetime(old_df['Date'], errors='coerce')
+            old_df = old_df.dropna(subset=['Date'])
             
-            # Combine current cloud data with uploaded data, removing duplicates based on Date
             combined_df = pd.concat([df, old_df]).drop_duplicates(subset=['Date'], keep='last')
+            
+            # ENFORCEMENT FIX: Force the combined column back into a strict datetime format before sorting
+            combined_df['Date'] = pd.to_datetime(combined_df['Date'])
             combined_df = combined_df.sort_values(by='Date').reset_index(drop=True)
             
-            # Format back to string and push to cloud
             upload_df = combined_df.copy()
+            # Now the strftime command will successfully run
             upload_df['Date'] = upload_df['Date'].dt.strftime('%Y-%m-%d')
             conn.update(worksheet="Data", data=upload_df)
             
@@ -370,6 +373,7 @@ with tab_data:
     
     if not df.empty:
         df_edit = df.copy()
+        df_edit['Date'] = pd.to_datetime(df_edit['Date'])
         df_edit['Date'] = df_edit['Date'].dt.strftime('%Y-%m-%d')
         edited_df = st.data_editor(df_edit.sort_values(by='Date', ascending=False), num_rows="dynamic", use_container_width=True)
         if st.button("💾 Save Edits to Cloud", type="primary"):
