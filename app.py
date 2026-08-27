@@ -285,42 +285,25 @@ with tab_dashboard:
         col3.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}")
         col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal")
         
-        # --- DYNAMIC REWARD TRACKER ---
+       # --- DYNAMIC REWARD TRACKER ---
         rewards = load_rewards(st.session_state.username)
         
         # Only render the system if the user has created at least one reward
         if rewards:
             st.markdown("### 🎁 Next Reward Tracker")
-        
-            if st.session_state.username.lower() == "yani":
-                rewards = [
-                    (181.9, "Video game", "-20 lb"), (176.9, "New gym shirt(s)", "-25 lb"),
-                    (171.9, "Arcade trip", "-30 lb"), (166.9, "New hat", "-35 lb"),
-                    (161.9, "Bowling trip", "-40 lb"), (156.9, "New gym pants", "-45 lb"),
-                    (151.9, "Nose piercing", "-50 lb"), (146.9, "New shoes", "-55 lb"),
-                    (141.9, "Cheat day", "-60 lb")
-                ]
-            else:
-                # Generic Milestones for Friends
-                rewards = [
-                    (first_weight - 5, "Level 1 Milestone", f"-5 {UNIT}"),
-                    (first_weight - 10, "Level 2 Milestone", f"-10 {UNIT}"),
-                    (first_weight - 15, "Level 3 Milestone", f"-15 {UNIT}"),
-                    (first_weight - 20, "Level 4 Milestone", f"-20 {UNIT}"),
-                    (first_weight - 25, "Level 5 Milestone", f"-25 {UNIT}")
-                ]
-        
+            
             next_reward = None
             previous_target = first_weight
-            for target, name, label in rewards:
-                 if current_weight > target:
+            for target, name in rewards:
+                if current_weight > target:
+                    label = f"-{first_weight - target:.0f} {UNIT}"
                     next_reward = (target, name, label, previous_target)
                     break
                 previous_target = target
             
             if next_reward:
                 target_wt, reward_name, label, start_wt = next_reward
-                progress_val = (start_wt - current_weight) / (start_wt - target_wt)
+                progress_val = (start_wt - current_weight) / (start_wt - target_wt) if start_wt != target_wt else 1.0
                 progress_val = max(0.0, min(1.0, progress_val)) 
                 amount_to_go = current_weight - target_wt
                 st.write(f"**Next Unlock:** {reward_name} ({label}) — *Only {amount_to_go:.1f} {UNIT} to go!*")
