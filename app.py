@@ -17,6 +17,10 @@ st.set_page_config(page_title="Health Tracker", layout="wide")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ""
+
+# BUG FIX: Initialize confetti explicitly outside the login block 
+# so the app doesn't crash if you update the code while already logged in.
+if "confetti_fired" not in st.session_state:
     st.session_state.confetti_fired = False
 
 # Connect to Google Sheets
