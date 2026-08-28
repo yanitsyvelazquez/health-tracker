@@ -3,5 +3,5 @@ pandas
 plotly
 fpdf
 st-gsheets-connection
-google-generativeai
-pillow
+google-generativeai>=0.7.2
+Pillow
