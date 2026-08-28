@@ -154,13 +154,21 @@ if DARK_MODE:
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #4DA6FF !important; color: #121212 !important; border-color: #4DA6FF !important; font-weight: bold; }
         button[kind="primary"]:hover { background-color: #3388DD !important; border-color: #3388DD !important; }
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #4DA6FF !important; }
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #4DA6FF !important; }
-        div[data-baseweb="checkbox"] div:first-child { border-color: #4DA6FF !important; background-color: #4DA6FF !important; }
-        div[data-baseweb="slider"] div[role="slider"] { background-color: #4DA6FF !important; border-color: #4DA6FF !important; }
-        div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #4DA6FF !important; }
-        li[role="option"]:hover { background-color: rgba(77, 166, 255, 0.2) !important; color: #4DA6FF !important; }
-        li[role="option"][aria-selected="true"] { background-color: #4DA6FF !important; color: white !important; }
+        
+        /* Dashboard Time Filter Radio Buttons (Kept Normal) */
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #4DA6FF; }
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #4DA6FF; }
+        
+        /* --- CUSTOM INFRAGISTICS TIME PICKER POPOVER (DARK) --- */
+        div[data-testid="stPopoverBody"] { background-color: #1E1E1E !important; border: 1px solid #333 !important; padding: 15px !important; border-radius: 12px !important;}
+        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:first-child { display: none !important; } /* Nuke the circles */
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] { margin-right: 0px !important; width: 100% !important; justify-content: center !important; padding: 8px 0px !important; margin-bottom: 2px !important; transition: all 0.2s ease; border-radius: 6px !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] p { white-space: nowrap !important; font-size: 1.1rem !important; color: #A0A0A0; margin: 0 !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"]:hover { background-color: rgba(77, 166, 255, 0.1) !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] { background-color: rgba(77, 166, 255, 0.15) !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] p { color: #4DA6FF !important; font-weight: 800 !important; font-size: 1.2rem !important; }
+        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:nth-child(2) { margin-left: 0 !important; }
+        div[data-testid="stPopoverBody"] div[data-testid="stVerticalBlockBorderWrapper"] { border: none !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_dark"
@@ -180,13 +188,21 @@ else:
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #00509E !important; border-color: #00509E !important; }
         button[kind="primary"]:hover { background-color: #4DA6FF !important; border-color: #4DA6FF !important; color: white !important;}
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #00509E !important; }
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #00509E !important; }
-        div[data-baseweb="checkbox"] div:first-child { border-color: #00509E !important; background-color: #00509E !important; }
-        div[data-baseweb="slider"] div[role="slider"] { background-color: #00509E !important; border-color: #00509E !important; }
-        div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #00509E !important; }
-        li[role="option"]:hover { background-color: rgba(0, 80, 158, 0.1) !important; color: #00509E !important; }
-        li[role="option"][aria-selected="true"] { background-color: #00509E !important; color: white !important; }
+        
+        /* Dashboard Time Filter Radio Buttons (Kept Normal) */
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #00509E; }
+        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #00509E; }
+        
+        /* --- CUSTOM INFRAGISTICS TIME PICKER POPOVER (LIGHT) --- */
+        div[data-testid="stPopoverBody"] { background-color: #ffffff !important; border: 1px solid #e0e0e0 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.1) !important; padding: 15px !important; border-radius: 12px !important;}
+        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:first-child { display: none !important; } /* Nuke the circles */
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] { margin-right: 0px !important; width: 100% !important; justify-content: center !important; padding: 8px 0px !important; margin-bottom: 2px !important; transition: all 0.2s ease; border-radius: 6px !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] p { white-space: nowrap !important; font-size: 1.1rem !important; color: #555555; margin: 0 !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"]:hover { background-color: rgba(0, 80, 158, 0.05) !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] { background-color: rgba(77, 166, 255, 0.15) !important; }
+        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] p { color: #00509E !important; font-weight: 800 !important; font-size: 1.2rem !important; }
+        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:nth-child(2) { margin-left: 0 !important; }
+        div[data-testid="stPopoverBody"] div[data-testid="stVerticalBlockBorderWrapper"] { border: none !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
@@ -250,50 +266,35 @@ with tab_log:
             with col_m2:
                 st.markdown("<p style='font-size: 14px; color: #555555; margin-bottom: 5px;'>Time of Weigh-In</p>", unsafe_allow_html=True)
                 
-                # --- BESPOKE SCROLLING TIME PICKER INITIALIZATION ---
+                # --- INITIALIZE TIME ---
                 if "weigh_time_hr" not in st.session_state:
                     now = datetime.now()
                     st.session_state.weigh_time_hr = now.strftime("%I")
                     st.session_state.weigh_time_mn = now.strftime("%M")
                     st.session_state.weigh_time_ampm = now.strftime("%p")
                 
-                # Try generating the popover design (available in standard modern Streamlit)
+                # --- INFRAGISTICS STYLED POPOVER ---
                 try:
                     with st.popover(f"⏰ Selected Time: {st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"):
-                        st.markdown("**Scroll and click to select (No typing):**")
+                        st.markdown("<p style='text-align: center; margin-bottom: 10px; font-weight: bold;'>Scroll to select time:</p>", unsafe_allow_html=True)
                         c1, c2, c3 = st.columns(3)
                         with c1:
-                            with st.container(height=175):
+                            with st.container(height=200, border=False):
                                 hr = st.radio("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(st.session_state.weigh_time_hr)-1, key="pick_hr", label_visibility="collapsed")
                         with c2:
-                            with st.container(height=175):
+                            with st.container(height=200, border=False):
                                 mn = st.radio("Minute", [f"{i:02d}" for i in range(0, 60)], index=int(st.session_state.weigh_time_mn), key="pick_mn", label_visibility="collapsed")
                         with c3:
-                            with st.container(height=175):
+                            with st.container(height=200, border=False):
                                 ampm = st.radio("AM/PM", ["AM", "PM"], index=0 if st.session_state.weigh_time_ampm == "AM" else 1, key="pick_ampm", label_visibility="collapsed")
                         
                         st.session_state.weigh_time_hr = hr
                         st.session_state.weigh_time_mn = mn
                         st.session_state.weigh_time_ampm = ampm
-                # Fallback purely in case the cloud server uses a highly outdated Streamlit version
-                except AttributeError:
-                    with st.expander(f"⏰ Selected Time: {st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"):
-                        st.markdown("**Scroll and click to select (No typing):**")
-                        c1, c2, c3 = st.columns(3)
-                        with c1:
-                            with st.container(height=175):
-                                hr = st.radio("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(st.session_state.weigh_time_hr)-1, key="pick_hr_f", label_visibility="collapsed")
-                        with c2:
-                            with st.container(height=175):
-                                mn = st.radio("Minute", [f"{i:02d}" for i in range(0, 60)], index=int(st.session_state.weigh_time_mn), key="pick_mn_f", label_visibility="collapsed")
-                        with c3:
-                            with st.container(height=175):
-                                ampm = st.radio("AM/PM", ["AM", "PM"], index=0 if st.session_state.weigh_time_ampm == "AM" else 1, key="pick_ampm_f", label_visibility="collapsed")
                         
-                        st.session_state.weigh_time_hr = hr
-                        st.session_state.weigh_time_mn = mn
-                        st.session_state.weigh_time_ampm = ampm
-
+                except AttributeError:
+                    st.error("Please update Streamlit to use the popover clock.")
+                    
                 time_str = f"{st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"
             
             if st.form_submit_button("Save Morning Weigh-In", use_container_width=True):
@@ -312,7 +313,7 @@ with tab_log:
                 df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
                 conn.update(worksheet="Data", data=df_upload)
                 
-                # Reset morning form values after successfully pushing to the cloud
+                # Reset time state so it grabs the current time on the next fresh load
                 st.session_state.pop("weigh_time_hr", None)
                 st.session_state.pop("weigh_time_mn", None)
                 st.session_state.pop("weigh_time_ampm", None)
