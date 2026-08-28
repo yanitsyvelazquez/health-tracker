@@ -24,11 +24,13 @@ if "logged_in" not in st.session_state:
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Configure AI securely
+# Configure AI securely using ONLY the modern 1.5 endpoint
 try:
     genai.configure(api_key=st.secrets["gemini_api_key"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
     ai_active = True
 except Exception:
+    model = None
     ai_active = False
 
 # --- 2. SECURE LOGIN & REGISTRATION SYSTEM ---
@@ -552,14 +554,13 @@ with tab_ai:
                     
                     with st.chat_message("assistant", avatar="🤖"):
                         try:
-                            # CRASH-PROOF ENGINE: Dynamically maps directly to legacy versions to prevent 404 errors.
+                            # MODERN ENGINE ONLY: Using exclusively gemini-1.5-flash as the fallback 
+                            # generated 404 errors due to gemini-pro being deprecated.
+                            api_contents = [sys_prompt + "\n\nUser: " + user_input]
                             if img:
-                                fallback_model = genai.GenerativeModel('gemini-pro-vision')
-                                response = fallback_model.generate_content([sys_prompt + "\n\nUser: " + user_input, img])
-                            else:
-                                fallback_model = genai.GenerativeModel('gemini-pro')
-                                response = fallback_model.generate_content(sys_prompt + "\n\nUser: " + user_input)
-                            
+                                api_contents.append(img)
+                                
+                            response = model.generate_content(api_contents)
                             bot_reply = response.text
                             
                             match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
@@ -573,7 +574,7 @@ with tab_ai:
                                 st.cache_data.clear()
                                 
                         except Exception as e:
-                            bot_reply = f"⚠️ **API Request Failed**: The application caught a fatal error while trying to connect to Google's server. Ensure your `google-generativeai` package is installed. (Technical error: {str(e)})"
+                            bot_reply = f"⚠️ **API Request Failed**: The application caught a fatal error while trying to connect to Google's server. Ensure your `google-generativeai` package is installed and your API key has access to Gemini 1.5. (Technical error: {str(e)})"
                             
                         st.markdown(bot_reply)
                         st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
