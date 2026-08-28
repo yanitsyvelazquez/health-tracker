@@ -179,12 +179,27 @@ else:
 try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
     if 'Weight_lb' in df_all.columns: df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
-    if 'Weight_Timestamp' not in df_all.columns: df_all['Weight_Timestamp'] = ""
-    else: df_all['Weight_Timestamp'] = df_all['Weight_Timestamp'].fillna("")
+    
+    # STRONGLY TYPE COLUMNS TO PREVENT PANDAS TYPE ERRORS ON INSERTION
+    if 'Weight_Timestamp' not in df_all.columns: 
+        df_all['Weight_Timestamp'] = ""
+    else: 
+        df_all['Weight_Timestamp'] = df_all['Weight_Timestamp'].fillna("").astype(str)
         
     for col in ["Weight", "Calories", "Protein_g"]:
         if col in df_all.columns:
             df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
+            
+    if 'Workout_Day' in df_all.columns:
+        # Forces any generic string/float representation of True/False into a strict python boolean
+        df_all['Workout_Day'] = df_all['Workout_Day'].apply(lambda x: str(x).strip().upper() in ['TRUE', '1', '1.0'])
+    else:
+        df_all['Workout_Day'] = False
+        
+    if 'Notes' in df_all.columns:
+        df_all['Notes'] = df_all['Notes'].fillna("").astype(str)
+    else:
+        df_all['Notes'] = ""
             
     df = df_all[df_all['Username'] == st.session_state.username].copy()
     if not df.empty:
