@@ -27,7 +27,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # Configure AI
 try:
     genai.configure(api_key=st.secrets["gemini_api_key"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # UPDATED: Using -latest suffix to prevent 404 Not Found errors on older SDKs
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception:
     model = None
 
@@ -123,7 +124,7 @@ def load_settings(username):
     return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000.0}
 
 settings = load_settings(st.session_state.username)
-BASE_CALORIE_GOAL = settings["calorie_goal"] # RESTORED THIS VARIABLE
+BASE_CALORIE_GOAL = settings["calorie_goal"]
 GOAL_WEIGHT = settings["goal_weight"]
 DARK_MODE = settings["dark_mode"]
 UNIT = settings["unit"]
@@ -161,6 +162,7 @@ if DARK_MODE:
         div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #4DA6FF !important; }
         li[role="option"]:hover { background-color: rgba(77, 166, 255, 0.2) !important; color: #4DA6FF !important; }
         li[role="option"][aria-selected="true"] { background-color: #4DA6FF !important; color: white !important; }
+        input[type="time"] { accent-color: #4DA6FF !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_dark"
@@ -187,6 +189,7 @@ else:
         div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #00509E !important; }
         li[role="option"]:hover { background-color: rgba(0, 80, 158, 0.1) !important; color: #00509E !important; }
         li[role="option"][aria-selected="true"] { background-color: #00509E !important; color: white !important; }
+        input[type="time"] { accent-color: #4DA6FF !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
@@ -212,13 +215,11 @@ except Exception:
 
 # TDEE CALCULATION (Auto-Adaptive Engine)
 if len(df) >= 14:
-    # Auto-Adaptive: Real-world calculation
     weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
     avg_cals = df['Calories'].mean()
     est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
     adaptive_active = True
 else:
-    # Baseline AI Engine
     est_tdee = AI_TDEE
     adaptive_active = False
 
@@ -226,10 +227,9 @@ else:
 diet_break_triggered = False
 if st.session_state.username.lower() == "yani" and len(df) >= 7:
     recent_7 = df.tail(7)
-    # Check if weight 7 days ago is less than or equal to current weight (A stall)
     if recent_7.iloc[0]['Weight'] <= recent_7.iloc[-1]['Weight']:
         diet_break_triggered = True
-        CALORIE_GOAL = int(est_tdee) # Override to Maintenance
+        CALORIE_GOAL = int(est_tdee) 
     else:
         CALORIE_GOAL = BASE_CALORIE_GOAL
 else:
@@ -251,13 +251,8 @@ with tab_log:
                 weight_input = st.number_input(f"Weight ({UNIT})", min_value=0.0, format="%.1f")
             
             with col_m2:
-                st.markdown("<p style='font-size: 14px; color: #555555; margin-bottom: -15px;'>Time of Weigh-In</p>", unsafe_allow_html=True)
-                t_col1, t_col2, t_col3 = st.columns([1, 1, 1])
-                now = datetime.now()
-                with t_col1: hr = st.selectbox("Hr", [f"{i:02d}" for i in range(1, 13)], index=int(now.strftime("%I"))-1, label_visibility="collapsed")
-                with t_col2: mn = st.selectbox("Min", [f"{i:02d}" for i in range(0, 60)], index=int(now.strftime("%M")), label_visibility="collapsed")
-                with t_col3: ampm = st.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1, label_visibility="collapsed")
-                time_str = f"{hr}:{mn} {ampm}"
+                time_val = st.time_input("Time of Weigh-In", value=datetime.now().time())
+                time_str = time_val.strftime("%I:%M %p")
             
             if st.form_submit_button("Save Morning Weigh-In", use_container_width=True):
                 entry_date_str = str(entry_date_m)
@@ -512,8 +507,19 @@ with tab_ai:
                         if img:
                             api_contents.append(img)
                             
-                        response = model.generate_content(api_contents)
-                        bot_reply = response.text
+                        # --- CRASH PREVENTION ENGINE ---
+                        try:
+                            # Primary attempt using the standard model
+                            response = model.generate_content(api_contents)
+                            bot_reply = response.text
+                        except Exception as e:
+                            # Fallback Protocol: If the user's SDK/API key doesn't recognize 1.5, use legacy models
+                            try:
+                                fallback_model = genai.GenerativeModel('gemini-pro-vision' if img else 'gemini-pro')
+                                response = fallback_model.generate_content(api_contents)
+                                bot_reply = response.text
+                            except Exception as final_e:
+                                bot_reply = f"⚠️ **API Error Caught & Handled**: The Google Generative AI package could not complete the request. Please ensure `google-generativeai` is listed in your `requirements.txt` file. (Original Error: {str(e)})"
                         
                         match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
                         if match:
