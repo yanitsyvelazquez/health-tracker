@@ -24,13 +24,12 @@ if "logged_in" not in st.session_state:
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Configure AI
+# Configure AI securely
 try:
     genai.configure(api_key=st.secrets["gemini_api_key"])
-    # UPDATED: Using -latest suffix to prevent 404 Not Found errors on older SDKs
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    ai_active = True
 except Exception:
-    model = None
+    ai_active = False
 
 # --- 2. SECURE LOGIN & REGISTRATION SYSTEM ---
 if not st.session_state.logged_in:
@@ -162,7 +161,6 @@ if DARK_MODE:
         div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #4DA6FF !important; }
         li[role="option"]:hover { background-color: rgba(77, 166, 255, 0.2) !important; color: #4DA6FF !important; }
         li[role="option"][aria-selected="true"] { background-color: #4DA6FF !important; color: white !important; }
-        input[type="time"] { accent-color: #4DA6FF !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_dark"
@@ -189,7 +187,6 @@ else:
         div[data-baseweb="slider"] div[data-testid="stThumbValue"] { color: #00509E !important; }
         li[role="option"]:hover { background-color: rgba(0, 80, 158, 0.1) !important; color: #00509E !important; }
         li[role="option"][aria-selected="true"] { background-color: #00509E !important; color: white !important; }
-        input[type="time"] { accent-color: #4DA6FF !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
@@ -244,15 +241,60 @@ with tab_log:
     log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition"])
     
     with log_tab1:
-        with st.form("morning_form", clear_on_submit=True):
+        with st.form("morning_form", clear_on_submit=False):
             col_m1, col_m2 = st.columns(2)
             with col_m1:
                 entry_date_m = st.date_input("Date", value=date.today(), key="m_date")
                 weight_input = st.number_input(f"Weight ({UNIT})", min_value=0.0, format="%.1f")
             
             with col_m2:
-                time_val = st.time_input("Time of Weigh-In", value=datetime.now().time())
-                time_str = time_val.strftime("%I:%M %p")
+                st.markdown("<p style='font-size: 14px; color: #555555; margin-bottom: 5px;'>Time of Weigh-In</p>", unsafe_allow_html=True)
+                
+                # --- BESPOKE SCROLLING TIME PICKER INITIALIZATION ---
+                if "weigh_time_hr" not in st.session_state:
+                    now = datetime.now()
+                    st.session_state.weigh_time_hr = now.strftime("%I")
+                    st.session_state.weigh_time_mn = now.strftime("%M")
+                    st.session_state.weigh_time_ampm = now.strftime("%p")
+                
+                # Try generating the popover design (available in standard modern Streamlit)
+                try:
+                    with st.popover(f"⏰ Selected Time: {st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"):
+                        st.markdown("**Scroll and click to select (No typing):**")
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            with st.container(height=175):
+                                hr = st.radio("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(st.session_state.weigh_time_hr)-1, key="pick_hr", label_visibility="collapsed")
+                        with c2:
+                            with st.container(height=175):
+                                mn = st.radio("Minute", [f"{i:02d}" for i in range(0, 60)], index=int(st.session_state.weigh_time_mn), key="pick_mn", label_visibility="collapsed")
+                        with c3:
+                            with st.container(height=175):
+                                ampm = st.radio("AM/PM", ["AM", "PM"], index=0 if st.session_state.weigh_time_ampm == "AM" else 1, key="pick_ampm", label_visibility="collapsed")
+                        
+                        st.session_state.weigh_time_hr = hr
+                        st.session_state.weigh_time_mn = mn
+                        st.session_state.weigh_time_ampm = ampm
+                # Fallback purely in case the cloud server uses a highly outdated Streamlit version
+                except AttributeError:
+                    with st.expander(f"⏰ Selected Time: {st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"):
+                        st.markdown("**Scroll and click to select (No typing):**")
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            with st.container(height=175):
+                                hr = st.radio("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(st.session_state.weigh_time_hr)-1, key="pick_hr_f", label_visibility="collapsed")
+                        with c2:
+                            with st.container(height=175):
+                                mn = st.radio("Minute", [f"{i:02d}" for i in range(0, 60)], index=int(st.session_state.weigh_time_mn), key="pick_mn_f", label_visibility="collapsed")
+                        with c3:
+                            with st.container(height=175):
+                                ampm = st.radio("AM/PM", ["AM", "PM"], index=0 if st.session_state.weigh_time_ampm == "AM" else 1, key="pick_ampm_f", label_visibility="collapsed")
+                        
+                        st.session_state.weigh_time_hr = hr
+                        st.session_state.weigh_time_mn = mn
+                        st.session_state.weigh_time_ampm = ampm
+
+                time_str = f"{st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"
             
             if st.form_submit_button("Save Morning Weigh-In", use_container_width=True):
                 entry_date_str = str(entry_date_m)
@@ -269,6 +311,11 @@ with tab_log:
                 df_upload = df_all.copy()
                 df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
                 conn.update(worksheet="Data", data=df_upload)
+                
+                # Reset morning form values after successfully pushing to the cloud
+                st.session_state.pop("weigh_time_hr", None)
+                st.session_state.pop("weigh_time_mn", None)
+                st.session_state.pop("weigh_time_ampm", None)
                 st.rerun()
 
     with log_tab2:
@@ -438,7 +485,7 @@ with tab_dashboard:
 with tab_ai:
     st.header("🤖 AI TDEE & Fitness Coach")
     
-    if model is None:
+    if not ai_active:
         st.error("⚠️ Please add `gemini_api_key = '...'` to your Streamlit secrets to activate the AI Coach.")
     else:
         chat_col, profile_col = st.columns([2.5, 1])
@@ -503,33 +550,29 @@ with tab_ai:
                         """
                     
                     with st.chat_message("assistant", avatar="🤖"):
-                        api_contents = [sys_prompt, user_input]
-                        if img:
-                            api_contents.append(img)
-                            
-                        # --- CRASH PREVENTION ENGINE ---
                         try:
-                            # Primary attempt using the standard model
-                            response = model.generate_content(api_contents)
+                            # CRASH-PROOF ENGINE: Dynamically maps directly to legacy versions to prevent 404 errors.
+                            if img:
+                                fallback_model = genai.GenerativeModel('gemini-pro-vision')
+                                response = fallback_model.generate_content([sys_prompt + "\n\nUser: " + user_input, img])
+                            else:
+                                fallback_model = genai.GenerativeModel('gemini-pro')
+                                response = fallback_model.generate_content(sys_prompt + "\n\nUser: " + user_input)
+                            
                             bot_reply = response.text
+                            
+                            match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
+                            if match:
+                                new_tdee_val = float(match.group(1))
+                                bot_reply = re.sub(r'NEW_TDEE:\s*\d+', '', bot_reply).strip()
+                                s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
+                                s_df.loc[s_df['Username'] == st.session_state.username, 'ai_tdee'] = new_tdee_val
+                                conn.update(worksheet="Settings", data=s_df)
+                                st.toast(f"Weekly Baseline TDEE Updated to {new_tdee_val} kcal!", icon="⚙️")
+                                st.cache_data.clear()
+                                
                         except Exception as e:
-                            # Fallback Protocol: If the user's SDK/API key doesn't recognize 1.5, use legacy models
-                            try:
-                                fallback_model = genai.GenerativeModel('gemini-pro-vision' if img else 'gemini-pro')
-                                response = fallback_model.generate_content(api_contents)
-                                bot_reply = response.text
-                            except Exception as final_e:
-                                bot_reply = f"⚠️ **API Error Caught & Handled**: The Google Generative AI package could not complete the request. Please ensure `google-generativeai` is listed in your `requirements.txt` file. (Original Error: {str(e)})"
-                        
-                        match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
-                        if match:
-                            new_tdee_val = float(match.group(1))
-                            bot_reply = re.sub(r'NEW_TDEE:\s*\d+', '', bot_reply).strip()
-                            s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-                            s_df.loc[s_df['Username'] == st.session_state.username, 'ai_tdee'] = new_tdee_val
-                            conn.update(worksheet="Settings", data=s_df)
-                            st.toast(f"Weekly Baseline TDEE Updated to {new_tdee_val} kcal!", icon="⚙️")
-                            st.cache_data.clear()
+                            bot_reply = f"⚠️ **API Request Failed**: The application caught a fatal error while trying to connect to Google's server. Ensure your `google-generativeai` package is installed. (Technical error: {str(e)})"
                             
                         st.markdown(bot_reply)
                         st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
