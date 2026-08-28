@@ -18,8 +18,7 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ""
 
-# BUG FIX: Initialize confetti explicitly outside the login block 
-# so the app doesn't crash if you update the code while already logged in.
+# Initialize confetti explicitly outside the login block 
 if "confetti_fired" not in st.session_state:
     st.session_state.confetti_fired = False
 
@@ -433,7 +432,8 @@ with tab_dashboard:
         if graph_grouping == "Weekly":
             df_chart = df_chart.set_index('Date')[['Weight', 'Calories', 'Protein_g', '7-Day Avg']].resample('W').mean().reset_index()
         elif graph_grouping == "Monthly":
-            df_chart = df_chart.set_index('Date')[['Weight', 'Calories', 'Protein_g', '7-Day Avg']].resample('M').mean().reset_index()
+            # BUG FIX: Changed 'M' to 'ME' to support newer Pandas versions (> 2.2.0)
+            df_chart = df_chart.set_index('Date')[['Weight', 'Calories', 'Protein_g', '7-Day Avg']].resample('ME').mean().reset_index()
 
         current_deficit = est_tdee - CALORIE_GOAL
 
