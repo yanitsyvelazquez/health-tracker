@@ -200,9 +200,12 @@ if len(df) >= 14:
     avg_cals = df['Calories'].mean()
     est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
     adaptive_active = True
+    tdee_help_text = f"Math: {avg_cals:.0f} (avg eaten) + (({weight_diff:.1f} {UNIT} lost * {CALS_PER_UNIT} cals) / {len(df)} days)"
 else:
     est_tdee = MANUAL_TDEE
     adaptive_active = False
+    days_left = 14 - len(df) if len(df) < 14 else 14
+    tdee_help_text = f"Manual Baseline. Log {days_left} more day(s) of weight & calories to unlock Auto-Adaptive TDEE."
 
 # YANI PROTOCOL: Diet Break Trigger
 diet_break_triggered = False
@@ -363,7 +366,7 @@ with tab_dashboard:
         col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", delta=f"{weight_delta:+.1f} {UNIT}" if weight_delta != 0 else None, delta_color="inverse", help=f"Last logged{time_display}")
         tdee_label = f"{est_tdee:.0f} kcal"
         tdee_delta = "Adaptive (Auto)" if adaptive_active else "Manual Baseline"
-        col2.metric("Est. TDEE", tdee_label, delta=tdee_delta, delta_color="normal" if adaptive_active else "off")
+        col2.metric("Est. TDEE", tdee_label, delta=tdee_delta, delta_color="normal" if adaptive_active else "off", help=tdee_help_text)
         col3.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}", delta=" ", delta_color="off")
         col4.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}", delta=" ", delta_color="off")
         col5.metric("Loss Velocity", f"{velocity:.1f} {UNIT}/wk", help="Based on last 14 days", delta=" ", delta_color="off")
@@ -432,7 +435,6 @@ with tab_dashboard:
         if graph_grouping == "Weekly":
             df_chart = df_chart.set_index('Date')[['Weight', 'Calories', 'Protein_g', '7-Day Avg']].resample('W').mean().reset_index()
         elif graph_grouping == "Monthly":
-            # BUG FIX: Changed 'M' to 'ME' to support newer Pandas versions (> 2.2.0)
             df_chart = df_chart.set_index('Date')[['Weight', 'Calories', 'Protein_g', '7-Day Avg']].resample('ME').mean().reset_index()
 
         current_deficit = est_tdee - CALORIE_GOAL
