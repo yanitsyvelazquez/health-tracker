@@ -123,7 +123,7 @@ def load_settings(username):
     return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000.0}
 
 settings = load_settings(st.session_state.username)
-CALORIE_GOAL = settings["calorie_goal"]
+BASE_CALORIE_GOAL = settings["calorie_goal"] # RESTORED THIS VARIABLE
 GOAL_WEIGHT = settings["goal_weight"]
 DARK_MODE = settings["dark_mode"]
 UNIT = settings["unit"]
@@ -231,9 +231,9 @@ if st.session_state.username.lower() == "yani" and len(df) >= 7:
         diet_break_triggered = True
         CALORIE_GOAL = int(est_tdee) # Override to Maintenance
     else:
-        CALORIE_GOAL = settings["calorie_goal"]
+        CALORIE_GOAL = BASE_CALORIE_GOAL
 else:
-    CALORIE_GOAL = settings["calorie_goal"]
+    CALORIE_GOAL = BASE_CALORIE_GOAL
 
 # --- TABS ---
 tab_dashboard, tab_log, tab_ai, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🤖 AI Coach", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
@@ -391,10 +391,9 @@ with tab_dashboard:
         fig_weight.add_trace(go.Scatter(x=df_filtered['Date'], y=df_filtered['7-Day Avg'], mode='lines', name='7-Day Trend', line=dict(color='#00509E', width=3)))
         fig_weight.add_hline(y=GOAL_WEIGHT, line_dash="dash", line_color="#28a745", annotation_text="Goal Weight", annotation_position="bottom left")
         
-        # --- THE FIX: Capping max projection distance and requiring a meaningful deficit ---
         if current_deficit > 50 and current_weight > GOAL_WEIGHT:
             days_to_goal = (current_weight - GOAL_WEIGHT) * CALS_PER_UNIT / current_deficit
-            if days_to_goal < 3650:  # Prevents crash by capping the visual line to a 10-year maximum
+            if days_to_goal < 3650:
                 target_date = df['Date'].iloc[-1] + pd.Timedelta(days=days_to_goal)
                 fig_weight.add_trace(go.Scatter(x=[df['Date'].iloc[-1], target_date], y=[current_weight, GOAL_WEIGHT], mode='lines', name='Goal Forecast', line=dict(color='#28a745', dash='dot', width=3)))
         
