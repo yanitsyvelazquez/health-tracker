@@ -3,12 +3,8 @@ import pandas as pd
 from datetime import date, datetime
 import plotly.express as px
 import plotly.graph_objects as go
-from fpdf import FPDF
 from streamlit_gsheets import GSheetsConnection
 import hashlib
-import google.generativeai as genai
-import re
-from PIL import Image
 
 # --- HELPER FUNCTION: PASSWORD ENCRYPTION ---
 def make_hash(password):
@@ -23,15 +19,6 @@ if "logged_in" not in st.session_state:
 
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
-
-# Configure AI securely using ONLY the modern 1.5 endpoint
-try:
-    genai.configure(api_key=st.secrets["gemini_api_key"])
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-    ai_active = True
-except Exception:
-    model = None
-    ai_active = False
 
 # --- 2. SECURE LOGIN & REGISTRATION SYSTEM ---
 if not st.session_state.logged_in:
@@ -80,10 +67,10 @@ if not st.session_state.logged_in:
                 try:
                     s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
                 except Exception:
-                    s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit", "age", "height", "bf_pct", "ai_tdee"])
+                    s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit", "age", "height", "bf_pct", "manual_tdee"])
                     
                 default_goal = 150.0 if new_unit == "lb" else 70.0
-                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 1900, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000}])
+                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 1900, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 0.0, "manual_tdee": 2000}])
                 s_df = pd.concat([s_df, new_s_df], ignore_index=True)
                 conn.update(worksheet="Settings", data=s_df)
                 
@@ -96,7 +83,6 @@ st.sidebar.write(f"👤 Logged in as: **{st.session_state.username}**")
 if st.sidebar.button("Logout"):
     st.session_state.logged_in = False
     st.session_state.username = ""
-    st.session_state.chat_history = []
     st.rerun()
 
 # Load Settings specific to logged-in user
@@ -118,11 +104,12 @@ def load_settings(username):
                 "age": int(user_s.iloc[0].get('age', 25)),
                 "height": float(user_s.iloc[0].get('height', 65.0)),
                 "bf_pct": float(user_s.iloc[0].get('bf_pct', 0.0)),
-                "ai_tdee": float(user_s.iloc[0].get('ai_tdee', 2000.0))
+                # Fallback to the old ai_tdee column name so it doesn't break your existing cloud data
+                "manual_tdee": float(user_s.iloc[0].get('ai_tdee', 2000.0)) 
             }
     except Exception:
         pass
-    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "ai_tdee": 2000.0}
+    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "manual_tdee": 2000.0}
 
 settings = load_settings(st.session_state.username)
 BASE_CALORIE_GOAL = settings["calorie_goal"]
@@ -132,7 +119,7 @@ UNIT = settings["unit"]
 AGE = settings["age"]
 HEIGHT = settings["height"]
 BF_PCT = settings["bf_pct"]
-AI_TDEE = settings["ai_tdee"]
+MANUAL_TDEE = settings["manual_tdee"]
 
 CALS_PER_UNIT = 3500 if UNIT == "lb" else 7700
 PROTEIN_MULTIPLIER = 0.8 if UNIT == "lb" else 1.76
@@ -156,21 +143,6 @@ if DARK_MODE:
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #4DA6FF !important; color: #121212 !important; border-color: #4DA6FF !important; font-weight: bold; }
         button[kind="primary"]:hover { background-color: #3388DD !important; border-color: #3388DD !important; }
-        
-        /* Dashboard Time Filter Radio Buttons (Kept Normal) */
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #4DA6FF; }
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #4DA6FF; }
-        
-        /* --- CUSTOM INFRAGISTICS TIME PICKER POPOVER (DARK) --- */
-        div[data-testid="stPopoverBody"] { background-color: #1E1E1E !important; border: 1px solid #333 !important; padding: 15px !important; border-radius: 12px !important;}
-        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:first-child { display: none !important; } /* Nuke the circles */
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] { margin-right: 0px !important; width: 100% !important; justify-content: center !important; padding: 8px 0px !important; margin-bottom: 2px !important; transition: all 0.2s ease; border-radius: 6px !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] p { white-space: nowrap !important; font-size: 1.1rem !important; color: #A0A0A0; margin: 0 !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"]:hover { background-color: rgba(77, 166, 255, 0.1) !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] { background-color: rgba(77, 166, 255, 0.15) !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] p { color: #4DA6FF !important; font-weight: 800 !important; font-size: 1.2rem !important; }
-        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:nth-child(2) { margin-left: 0 !important; }
-        div[data-testid="stPopoverBody"] div[data-testid="stVerticalBlockBorderWrapper"] { border: none !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_dark"
@@ -190,21 +162,6 @@ else:
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #00509E !important; border-color: #00509E !important; }
         button[kind="primary"]:hover { background-color: #4DA6FF !important; border-color: #4DA6FF !important; color: white !important;}
-        
-        /* Dashboard Time Filter Radio Buttons (Kept Normal) */
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child { border-color: #00509E; }
-        div[role="radiogroup"] label[data-baseweb="radio"] div:first-child div { background-color: #00509E; }
-        
-        /* --- CUSTOM INFRAGISTICS TIME PICKER POPOVER (LIGHT) --- */
-        div[data-testid="stPopoverBody"] { background-color: #ffffff !important; border: 1px solid #e0e0e0 !important; box-shadow: 0 8px 24px rgba(0,0,0,0.1) !important; padding: 15px !important; border-radius: 12px !important;}
-        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:first-child { display: none !important; } /* Nuke the circles */
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] { margin-right: 0px !important; width: 100% !important; justify-content: center !important; padding: 8px 0px !important; margin-bottom: 2px !important; transition: all 0.2s ease; border-radius: 6px !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"] p { white-space: nowrap !important; font-size: 1.1rem !important; color: #555555; margin: 0 !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"]:hover { background-color: rgba(0, 80, 158, 0.05) !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] { background-color: rgba(77, 166, 255, 0.15) !important; }
-        div[data-testid="stPopoverBody"] label[data-baseweb="radio"][aria-checked="true"] p { color: #00509E !important; font-weight: 800 !important; font-size: 1.2rem !important; }
-        div[data-testid="stPopoverBody"] div[data-baseweb="radio"] > div:nth-child(2) { margin-left: 0 !important; }
-        div[data-testid="stPopoverBody"] div[data-testid="stVerticalBlockBorderWrapper"] { border: none !important; }
         </style>
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
@@ -235,7 +192,7 @@ if len(df) >= 14:
     est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
     adaptive_active = True
 else:
-    est_tdee = AI_TDEE
+    est_tdee = MANUAL_TDEE
     adaptive_active = False
 
 # YANI PROTOCOL: Diet Break Trigger
@@ -251,7 +208,7 @@ else:
     CALORIE_GOAL = BASE_CALORIE_GOAL
 
 # --- TABS ---
-tab_dashboard, tab_log, tab_ai, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🤖 AI Coach", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
+tab_dashboard, tab_log, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboard", "✍️ Log Entry", "🔮 Simulator", "📁 Edit History", "⚙️ Settings"])
 
 # --- TAB: LOG ENTRY ---
 with tab_log:
@@ -259,7 +216,7 @@ with tab_log:
     log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition"])
     
     with log_tab1:
-        with st.form("morning_form", clear_on_submit=False):
+        with st.form("morning_form", clear_on_submit=True):
             col_m1, col_m2 = st.columns(2)
             with col_m1:
                 entry_date_m = st.date_input("Date", value=date.today(), key="m_date")
@@ -268,36 +225,16 @@ with tab_log:
             with col_m2:
                 st.markdown("<p style='font-size: 14px; color: #555555; margin-bottom: 5px;'>Time of Weigh-In</p>", unsafe_allow_html=True)
                 
-                # --- INITIALIZE TIME ---
-                if "weigh_time_hr" not in st.session_state:
-                    now = datetime.now()
-                    st.session_state.weigh_time_hr = now.strftime("%I")
-                    st.session_state.weigh_time_mn = now.strftime("%M")
-                    st.session_state.weigh_time_ampm = now.strftime("%p")
+                # Default current time for quick-logging
+                now = datetime.now()
                 
-                # --- INFRAGISTICS STYLED POPOVER ---
-                try:
-                    with st.popover(f"⏰ Selected Time: {st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"):
-                        st.markdown("<p style='text-align: center; margin-bottom: 10px; font-weight: bold;'>Scroll to select time:</p>", unsafe_allow_html=True)
-                        c1, c2, c3 = st.columns(3)
-                        with c1:
-                            with st.container(height=200, border=False):
-                                hr = st.radio("Hour", [f"{i:02d}" for i in range(1, 13)], index=int(st.session_state.weigh_time_hr)-1, key="pick_hr", label_visibility="collapsed")
-                        with c2:
-                            with st.container(height=200, border=False):
-                                mn = st.radio("Minute", [f"{i:02d}" for i in range(0, 60)], index=int(st.session_state.weigh_time_mn), key="pick_mn", label_visibility="collapsed")
-                        with c3:
-                            with st.container(height=200, border=False):
-                                ampm = st.radio("AM/PM", ["AM", "PM"], index=0 if st.session_state.weigh_time_ampm == "AM" else 1, key="pick_ampm", label_visibility="collapsed")
-                        
-                        st.session_state.weigh_time_hr = hr
-                        st.session_state.weigh_time_mn = mn
-                        st.session_state.weigh_time_ampm = ampm
-                        
-                except AttributeError:
-                    st.error("Please update Streamlit to use the popover clock.")
-                    
-                time_str = f"{st.session_state.weigh_time_hr}:{st.session_state.weigh_time_mn} {st.session_state.weigh_time_ampm}"
+                t_col1, t_col2 = st.columns([2, 1])
+                with t_col1:
+                    time_val = st.text_input("Time (HH:MM)", value=now.strftime("%I:%M"), key="weigh_time_text", label_visibility="collapsed")
+                with t_col2:
+                    ampm_val = st.selectbox("AM/PM", ["AM", "PM"], index=0 if now.strftime("%p") == "AM" else 1, key="weigh_ampm", label_visibility="collapsed")
+                
+                time_str = f"{time_val} {ampm_val}"
             
             if st.form_submit_button("Save Morning Weigh-In", use_container_width=True):
                 entry_date_str = str(entry_date_m)
@@ -311,14 +248,11 @@ with tab_log:
                     new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": time_str, "Weight": weight_input, "Calories": 0, "Protein_g": 0, "Workout_Day": False, "Notes": ""}])
                     df_all = pd.concat([df_all, new_entry], ignore_index=True)
                     st.toast("Morning weigh-in saved!", icon="🎉")
+                
                 df_upload = df_all.copy()
                 df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
                 conn.update(worksheet="Data", data=df_upload)
                 
-                # Reset time state so it grabs the current time on the next fresh load
-                st.session_state.pop("weigh_time_hr", None)
-                st.session_state.pop("weigh_time_mn", None)
-                st.session_state.pop("weigh_time_ampm", None)
                 st.rerun()
 
     with log_tab2:
@@ -389,11 +323,18 @@ with tab_dashboard:
             freeze_text = f" (🧊 {freezes_left} Freezes Available)" if freezes_left > 0 else ""
             st.markdown(f"<div class='streak-box'>🔥 You are on a {streak}-day logging streak!{freeze_text}</div>", unsafe_allow_html=True)
         
-        col1, col2, col3, col4 = st.columns(4)
+        # Inserted the calculated TDEE right onto the dashboard
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric(f"Current Weight", f"{current_weight:.1f} {UNIT}", delta=f"{weight_delta:+.1f} {UNIT}" if weight_delta != 0 else None, delta_color="inverse", help=f"Last logged{time_display}")
-        col2.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}", delta=" ", delta_color="off")
-        col3.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}", delta=" ", delta_color="off")
-        col4.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal", delta=" ", delta_color="off")
+        
+        tdee_label = f"{est_tdee:.0f} kcal"
+        tdee_delta = "Adaptive (Auto)" if adaptive_active else "Manual Baseline"
+        tdee_color = "normal" if adaptive_active else "off"
+        col2.metric("Est. TDEE", tdee_label, delta=tdee_delta, delta_color=tdee_color)
+        
+        col3.metric(f"Distance to Goal", f"{(current_weight - GOAL_WEIGHT):.1f} {UNIT}", delta=" ", delta_color="off")
+        col4.metric(f"Total Lost", f"{total_lost:.1f} {UNIT}", delta=" ", delta_color="off")
+        col5.metric("Avg Cal (7D)", f"{df.tail(7)['Calories'].mean():.0f} kcal", delta=" ", delta_color="off")
         
         st.markdown("### 🎁 Next Reward Tracker")
         if st.session_state.username.lower() == "yani":
@@ -484,101 +425,6 @@ with tab_dashboard:
     else:
         st.info("No data yet. Head over to the 'Log Entry' tab!")
 
-# --- TAB: AI COACH (WIX-STYLE CHAT LAYOUT) ---
-with tab_ai:
-    st.header("🤖 AI TDEE & Fitness Coach")
-    
-    if not ai_active:
-        st.error("⚠️ Please add `gemini_api_key = '...'` to your Streamlit secrets to activate the AI Coach.")
-    else:
-        chat_col, profile_col = st.columns([2.5, 1])
-        
-        with profile_col:
-            st.markdown("### 👤 User Profile")
-            st.markdown(f"**Current Weight:** {current_weight if not df.empty else 0:.1f} {WEIGHT_UNIT}")
-            st.markdown(f"**Goal Weight:** {GOAL_WEIGHT:.1f} {WEIGHT_UNIT}")
-            st.markdown(f"**Height:** {HEIGHT} {HEIGHT_UNIT}")
-            st.markdown(f"**Age:** {AGE}")
-            if BF_PCT > 0:
-                st.markdown(f"**Body Fat:** {BF_PCT}%")
-                
-            if adaptive_active:
-                st.markdown(f"**Current Est. TDEE:** <span style='color:#28a745; font-weight:bold; font-size:1.1rem;'>{est_tdee:.0f} kcal</span> *(Auto-Adaptive Active)*", unsafe_allow_html=True)
-            else:
-                st.markdown(f"**Current Est. TDEE:** <span style='color:#4DA6FF; font-weight:bold; font-size:1.1rem;'>{est_tdee:.0f} kcal</span> *(AI Baseline)*", unsafe_allow_html=True)
-                
-            st.info("💡 Tell the AI your typical weekly routine here. It will calculate your baseline TDEE and save it permanently.")
-            
-        with chat_col:
-            img_file = st.file_uploader("📸 Upload Image (Optional: e.g. treadmill results)", type=['png', 'jpg', 'jpeg'])
-            
-            if "chat_history" not in st.session_state or len(st.session_state.chat_history) == 0:
-                st.session_state.chat_history = [{"role": "assistant", "content": "Hello! I'm your AI fitness coach. Describe your typical weekly routine (or upload a cardio summary photo), and I'll help calculate your baseline TDEE!"}]
-                
-            chat_container = st.container(height=500)
-            
-            with chat_container:
-                for msg in st.session_state.chat_history:
-                    with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🤖"):
-                        st.markdown(msg["content"])
-                        if "image" in msg and msg["image"] is not None:
-                            st.image(msg["image"], width=250)
-                            
-            user_input = st.chat_input("Describe your baseline weekly routine (e.g., 'I run Mon/Wed, lift Tue/Thu')...")
-            
-            if user_input:
-                img = None
-                if img_file:
-                    img = Image.open(img_file)
-                
-                st.session_state.chat_history.append({"role": "user", "content": user_input, "image": img})
-                
-                with chat_container:
-                    with st.chat_message("user", avatar="👤"):
-                        st.markdown(user_input)
-                        if img:
-                            st.image(img, width=250)
-                            
-                    bf_text = f", Body Fat: {BF_PCT}%" if BF_PCT > 0 else ""
-                    sys_prompt = f"""You are an advanced fitness AI coach for {st.session_state.username}.
-                    Current User Stats: Age: {AGE}, Height: {HEIGHT} {HEIGHT_UNIT}, Current Weight: {current_weight if not df.empty else 0} {WEIGHT_UNIT}{bf_text}.
-                    Your job is to chat with the user, evaluate their overall WEEKLY routine, and calculate a baseline Total Daily Energy Expenditure (TDEE).
-                    If they upload an image (like a cardio machine summary), read the metrics from it to help assess their expenditure.
-                    If you calculate a NEW baseline TDEE, you MUST include the exact text 'NEW_TDEE: [number]' at the very end of your response so the system can read it.
-                    """
-
-                    if st.session_state.username.lower() == "yani":
-                        sys_prompt += """
-                        CRITICAL PROTOCOL: If the user ever mentions the urge to binge or overeat, you must drop everything and do whatever it takes to stop them. Be fiercely supportive, firm, and provide immediate redirection/distraction techniques to break the cycle.
-                        """
-                    
-                    with st.chat_message("assistant", avatar="🤖"):
-                        try:
-                            # MODERN ENGINE ONLY: Using exclusively gemini-1.5-flash as the fallback 
-                            # generated 404 errors due to gemini-pro being deprecated.
-                            api_contents = [sys_prompt + "\n\nUser: " + user_input]
-                            if img:
-                                api_contents.append(img)
-                                
-                            response = model.generate_content(api_contents)
-                            bot_reply = response.text
-                            
-                            match = re.search(r'NEW_TDEE:\s*(\d+)', bot_reply)
-                            if match:
-                                new_tdee_val = float(match.group(1))
-                                bot_reply = re.sub(r'NEW_TDEE:\s*\d+', '', bot_reply).strip()
-                                s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-                                s_df.loc[s_df['Username'] == st.session_state.username, 'ai_tdee'] = new_tdee_val
-                                conn.update(worksheet="Settings", data=s_df)
-                                st.toast(f"Weekly Baseline TDEE Updated to {new_tdee_val} kcal!", icon="⚙️")
-                                st.cache_data.clear()
-                                
-                        except Exception as e:
-                            bot_reply = f"⚠️ **API Request Failed**: The application caught a fatal error while trying to connect to Google's server. Ensure your `google-generativeai` package is installed and your API key has access to Gemini 1.5. (Technical error: {str(e)})"
-                            
-                        st.markdown(bot_reply)
-                        st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
-
 # --- TAB: SIMULATOR ---
 with tab_sim:
     st.header("🔮 'What-If' Simulator")
@@ -615,7 +461,6 @@ with tab_data:
 # --- TAB: GOALS & SETTINGS ---
 with tab_settings:
     st.header("⚙️ Cloud Settings & Profile")
-    st.write("Fill these out so the AI Coach can accurately model your TDEE and metabolism.")
     
     col1, col2, col3 = st.columns(3)
     with col1: 
@@ -626,17 +471,15 @@ with tab_settings:
         new_height = st.number_input(f"Total Height ({HEIGHT_UNIT})", value=HEIGHT, format="%.1f")
     with col3: 
         new_unit = st.selectbox("Preferred Unit", ["lb", "kg"], index=0 if UNIT == "lb" else 1)
-        new_bf = st.number_input("Body Fat % (Leave at 0 to ignore)", value=BF_PCT, format="%.1f")
+        # Allows manually forcing a TDEE baseline before the system auto-calculates after 14 days
+        new_manual_tdee = st.number_input("Manual TDEE Baseline", value=int(MANUAL_TDEE), step=50)
         
+    new_bf = st.number_input("Body Fat % (Leave at 0 to ignore)", value=BF_PCT, format="%.1f")
     new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
         
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         s_df_others = s_df[s_df['Username'] != st.session_state.username]
-        new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": AI_TDEE}])
-        updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
-        
-        conn.update(worksheet="Settings", data=updated_s_df)
-        st.success("Cloud settings updated!")
-        st.cache_data.clear()
-        st.rerun()
+        # We save 'new_manual_tdee' back into the 'ai_tdee' column so it doesn't break the existing cloud schema
+        new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": new_manual_tdee}])
+        updated_s_df = pd.concat([s_df_others, new_s_df],
