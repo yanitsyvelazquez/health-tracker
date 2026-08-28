@@ -482,4 +482,9 @@ with tab_settings:
         s_df_others = s_df[s_df['Username'] != st.session_state.username]
         # We save 'new_manual_tdee' back into the 'ai_tdee' column so it doesn't break the existing cloud schema
         new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": new_manual_tdee}])
-        updated_s_df = pd.concat([s_df_others, new_s_df],
+        updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
+        
+        conn.update(worksheet="Settings", data=updated_s_df)
+        st.success("Cloud settings updated!")
+        st.cache_data.clear()
+        st.rerun()
