@@ -180,7 +180,6 @@ try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
     if 'Weight_lb' in df_all.columns: df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
     
-    # STRONGLY TYPE COLUMNS TO PREVENT PANDAS TYPE ERRORS ON INSERTION
     if 'Weight_Timestamp' not in df_all.columns: 
         df_all['Weight_Timestamp'] = ""
     else: 
@@ -191,7 +190,6 @@ try:
             df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
             
     if 'Workout_Day' in df_all.columns:
-        # Forces any generic string/float representation of True/False into a strict python boolean
         df_all['Workout_Day'] = df_all['Workout_Day'].apply(lambda x: str(x).strip().upper() in ['TRUE', '1', '1.0'])
     else:
         df_all['Workout_Day'] = False
@@ -209,18 +207,40 @@ except Exception:
     df_all = pd.DataFrame(columns=["Username", "Date", "Weight_Timestamp", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
     df = pd.DataFrame()
 
-# TDEE CALCULATION (Auto-Adaptive Engine)
+# TDEE CALCULATION (Auto-Adaptive Engine w/ Untracked Day Protection)
 if len(df) >= 14:
+    tracked_df = df[df['Calories'] >= 0]
     weight_diff = df.iloc[0]['Weight'] - df.iloc[-1]['Weight']
-    avg_cals = df['Calories'].mean()
+    
+    if not tracked_df.empty:
+        avg_cals = tracked_df['Calories'].mean()
+    else:
+        avg_cals = MANUAL_TDEE
+        
     est_tdee = avg_cals + ((weight_diff * CALS_PER_UNIT) / len(df))
     adaptive_active = True
-    tdee_help_text = f"Math: {avg_cals:.0f} (avg eaten) + (({weight_diff:.1f} {UNIT} lost * {CALS_PER_UNIT} cals) / {len(df)} days)"
+    tdee_help_text = f"Math: {avg_cals:.0f} (tracked avg) + (({weight_diff:.1f} {UNIT} lost * {CALS_PER_UNIT} cals) / {len(df)} total days)"
 else:
     est_tdee = MANUAL_TDEE
     adaptive_active = False
     days_left = 14 - len(df) if len(df) < 14 else 14
     tdee_help_text = f"Manual Baseline. Log {days_left} more day(s) of weight & calories to unlock Auto-Adaptive TDEE."
+
+# GUESTIMATE UNTRACKED DAYS OVERRIDE
+if not df.empty:
+    for i in range(len(df)):
+        if df.loc[i, 'Calories'] == -1:
+            curr_weight = df.loc[i, 'Weight']
+            next_weight = 0
+            if i + 1 < len(df) and df.loc[i+1, 'Weight'] > 0:
+                next_weight = df.loc[i+1, 'Weight']
+            
+            if curr_weight > 0 and next_weight > 0:
+                loss = curr_weight - next_weight
+                guesstimate = est_tdee - (loss * CALS_PER_UNIT)
+                df.loc[i, 'Calories'] = max(0, min(10000, guesstimate))
+            else:
+                df.loc[i, 'Calories'] = est_tdee
 
 # YANI PROTOCOL: Diet Break Trigger
 diet_break_triggered = False
@@ -287,26 +307,31 @@ with tab_log:
     with log_tab2:
         with st.form("evening_form", clear_on_submit=True):
             entry_date_e = st.date_input("Date", value=date.today(), key="e_date")
+            untracked_day = st.checkbox("I didn't track today (Auto-guestimate using tomorrow's weight)")
+            
             col_e1, col_e2 = st.columns(2)
             with col_e1:
-                calorie_input = st.number_input("Calories", min_value=0, step=1)
-                protein_input = st.number_input("Protein (g)", min_value=0, step=1)
+                calorie_input = st.number_input("Calories", min_value=0, step=1, disabled=untracked_day)
+                protein_input = st.number_input("Protein (g)", min_value=0, step=1, disabled=untracked_day)
             with col_e2:
                 workout_day = st.checkbox("Did you workout today?")
                 notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
             
             if st.form_submit_button("Save Evening Nutrition", use_container_width=True):
+                final_cals = -1 if untracked_day else calorie_input
+                final_pro = 0 if untracked_day else protein_input
+                
                 entry_date_str = str(entry_date_e)
                 mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
                 if not df_all[mask].empty:
                     idx = df_all[mask].index[0]
-                    df_all.at[idx, 'Calories'] = calorie_input
-                    df_all.at[idx, 'Protein_g'] = protein_input
+                    df_all.at[idx, 'Calories'] = final_cals
+                    df_all.at[idx, 'Protein_g'] = final_pro
                     df_all.at[idx, 'Workout_Day'] = workout_day
                     df_all.at[idx, 'Notes'] = notes_input
                     st.toast("Evening nutrition updated!", icon="✅")
                 else:
-                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": calorie_input, "Protein_g": protein_input, "Workout_Day": workout_day, "Notes": notes_input}])
+                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": final_cals, "Protein_g": final_pro, "Workout_Day": workout_day, "Notes": notes_input}])
                     df_all = pd.concat([df_all, new_entry], ignore_index=True)
                     st.toast("Evening nutrition saved!", icon="🎉")
                 
@@ -419,10 +444,14 @@ with tab_dashboard:
             last_30 = df[df['Date'] >= (pd.Timestamp.now() - pd.Timedelta(days=30))]
             if len(last_30) > 0:
                 wt_lost = last_30.iloc[0]['Weight'] - last_30.iloc[-1]['Weight']
-                tot_cals = last_30['Calories'].sum()
+                
+                # Exclude -1 guestimates from the hard data wrap up
+                tracked_30 = last_30[last_30['Calories'] >= 0]
+                tot_cals = tracked_30['Calories'].sum()
+                
                 tot_workouts = last_30['Workout_Day'].sum()
                 st.write(f"**Weight Lost (30 Days):** {wt_lost:.1f} {UNIT}")
-                st.write(f"**Total Calories Eaten:** {tot_cals:,.0f} kcal")
+                st.write(f"**Total Tracked Calories Eaten:** {tot_cals:,.0f} kcal")
                 st.write(f"**Total Workouts:** {tot_workouts}")
             else:
                 st.write("Not enough data yet for a monthly wrap-up!")
@@ -590,7 +619,8 @@ with tab_data:
     st.header("Manage Cloud Data")
     
     if not df.empty:
-        df_edit = df.copy()
+        # Pull raw df_all to preserve the explicit -1 values in the database view
+        df_edit = df_all[df_all['Username'] == st.session_state.username].copy()
         df_edit['Date'] = pd.to_datetime(df_edit['Date']).dt.strftime('%Y-%m-%d')
         df_edit = df_edit.sort_values(by='Date', ascending=False).reset_index(drop=True)
         
@@ -608,7 +638,7 @@ with tab_data:
         start_idx = (page_num - 1) * rows_per_page
         end_idx = start_idx + rows_per_page
         
-        st.write("**Manual Editor:** Double-click a cell to edit. Delete rows using the trash can icon on the left.")
+        st.write("**Manual Editor:** Double-click a cell to edit. Delete rows using the trash can icon on the left. (Note: Untracked days are saved as -1)")
         edited_chunk = st.data_editor(df_edit.iloc[start_idx:end_idx], num_rows="dynamic", use_container_width=True)
         
         if st.button("💾 Save Page Edits to Cloud", type="primary"):
@@ -672,7 +702,6 @@ with tab_settings:
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         s_df_others = s_df[s_df['Username'] != st.session_state.username]
-        # Saving 'new_manual_tdee' back into the original 'ai_tdee' column to preserve your existing cloud schema
         new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": new_manual_tdee}])
         updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
         
