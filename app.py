@@ -25,7 +25,6 @@ st.sidebar.write(f"👤 **Single-User Mode:** {st.session_state.username}")
 def load_settings(username):
     try:
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-        # Ensure it matches "Yani" even if there are accidental spaces or lowercase letters in the database
         user_s = s_df[s_df['Username'].astype(str).str.strip().str.lower() == username.lower()]
         if not user_s.empty:
             unit_val = user_s.iloc[0].get('unit', 'lb')
@@ -40,11 +39,16 @@ def load_settings(username):
                 "age": int(user_s.iloc[0].get('age', 25)),
                 "height": float(user_s.iloc[0].get('height', 65.0)),
                 "bf_pct": float(user_s.iloc[0].get('bf_pct', 0.0)),
-                "manual_tdee": float(user_s.iloc[0].get('ai_tdee', 2000.0)) 
+                "manual_tdee": float(user_s.iloc[0].get('ai_tdee', 2000.0)),
+                "def_creatine": float(user_s.iloc[0].get('def_creatine', 5.0)),
+                "def_magnesium": float(user_s.iloc[0].get('def_magnesium', 400.0)),
+                "def_nitric": float(user_s.iloc[0].get('def_nitric', 1000.0)),
+                "def_carnitine": float(user_s.iloc[0].get('def_carnitine', 500.0))
             }
     except Exception:
         pass
-    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "manual_tdee": 2000.0}
+    # Fallback default values
+    return {"calorie_goal": 1900, "goal_weight": 170.0, "dark_mode": False, "unit": "lb", "age": 25, "height": 65.0, "bf_pct": 0.0, "manual_tdee": 2000.0, "def_creatine": 5.0, "def_magnesium": 400.0, "def_nitric": 1000.0, "def_carnitine": 500.0}
 
 settings = load_settings(st.session_state.username)
 BASE_CALORIE_GOAL = settings["calorie_goal"]
@@ -78,6 +82,7 @@ if DARK_MODE:
         div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within, div[data-baseweb="textarea"]:focus-within, div[data-testid="stChatInput"] textarea:focus { border-color: #4DA6FF !important; box-shadow: 0 0 0 1px #4DA6FF !important;}
         button[kind="primary"] { background-color: #4DA6FF !important; color: #121212 !important; border-color: #4DA6FF !important; font-weight: bold; }
         button[kind="primary"]:hover { background-color: #3388DD !important; border-color: #3388DD !important; }
+        .water-box { background: linear-gradient(145deg, #004d99, #0066cc) !important; color: white !important; border: none; padding: 20px; border-radius: 12px; font-size: 1.1rem; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
         @media (max-width: 768px) { div[data-testid="stMetric"] { padding: 10px !important; margin-bottom: 10px; } .stTabs [data-baseweb="tab-list"] { flex-wrap: wrap; } }
         </style>
     """, unsafe_allow_html=True)
@@ -91,6 +96,7 @@ else:
         div[data-testid="stMetric"]:hover { transform: translateY(-5px) !important; box-shadow: 0 8px 15px rgba(0, 80, 158, 0.15) !important; }
         .streak-box { background: linear-gradient(145deg, #E6F2FF, #ffffff); padding: 15px; border-radius: 12px; text-align: center; color: #00509E; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08); border: 1px solid #cce5ff; transition: transform 0.2s ease; }
         .streak-box:hover { transform: translateY(-3px); }
+        .water-box { background: linear-gradient(145deg, #E6F7FF, #BAE7FF) !important; color: #003A8C !important; border: 1px solid #91D5FF; padding: 20px; border-radius: 12px; font-size: 1.1rem; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0, 80, 158, 0.08); }
         button[data-baseweb="tab"] { background-color: transparent !important; padding: 10px 20px !important; border-radius: 8px !important; margin-right: 5px !important; transition: all 0.3s ease !important; color: #555555 !important; font-weight: 600 !important; }
         button[data-baseweb="tab"]:hover { background-color: rgba(0, 80, 158, 0.05) !important; transform: translateY(-2px); color: #00509E !important;}
         button[data-baseweb="tab"][aria-selected="true"] { background-color: #00509E !important; color: white !important; box-shadow: 0 4px 6px rgba(0, 80, 158, 0.2) !important; }
@@ -117,23 +123,43 @@ try:
         if col in df_all.columns:
             df_all[col] = pd.to_numeric(df_all[col], errors='coerce')
             
+    # Force Workout to explicit boolean
     if 'Workout_Day' in df_all.columns:
         df_all['Workout_Day'] = df_all['Workout_Day'].apply(lambda x: str(x).strip().upper() in ['TRUE', '1', '1.0'])
     else:
         df_all['Workout_Day'] = False
+        
+    # Supplement Mapping Engine (Translates old booleans to your default dosages so history isn't lost)
+    def convert_supp(x, default_dose):
+        val = str(x).strip().upper()
+        if val in ['TRUE', '1', '1.0']: return float(default_dose) if float(default_dose) > 0 else 1.0
+        if val in ['FALSE', '0', '0.0', 'NAN', 'NONE', '']: return 0.0
+        try: return float(x)
+        except: return 0.0
+
+    if 'Creatine' in df_all.columns: df_all['Creatine'] = df_all['Creatine'].apply(lambda x: convert_supp(x, settings['def_creatine']))
+    else: df_all['Creatine'] = 0.0
+    
+    if 'Magnesium_Glycinate' in df_all.columns: df_all['Magnesium_Glycinate'] = df_all['Magnesium_Glycinate'].apply(lambda x: convert_supp(x, settings['def_magnesium']))
+    else: df_all['Magnesium_Glycinate'] = 0.0
+    
+    if 'Nitric_Oxide' in df_all.columns: df_all['Nitric_Oxide'] = df_all['Nitric_Oxide'].apply(lambda x: convert_supp(x, settings['def_nitric']))
+    else: df_all['Nitric_Oxide'] = 0.0
+    
+    if 'L_Carnitine' in df_all.columns: df_all['L_Carnitine'] = df_all['L_Carnitine'].apply(lambda x: convert_supp(x, settings['def_carnitine']))
+    else: df_all['L_Carnitine'] = 0.0
         
     if 'Notes' in df_all.columns:
         df_all['Notes'] = df_all['Notes'].fillna("").astype(str)
     else:
         df_all['Notes'] = ""
             
-    # Use case-insensitive matching just in case the database says 'yani' instead of 'Yani'
     df = df_all[df_all['Username'].astype(str).str.strip().str.lower() == st.session_state.username.lower()].copy()
     if not df.empty:
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values(by='Date').reset_index(drop=True)
 except Exception:
-    df_all = pd.DataFrame(columns=["Username", "Date", "Weight_Timestamp", "Weight", "Calories", "Protein_g", "Workout_Day", "Notes"])
+    df_all = pd.DataFrame(columns=["Username", "Date", "Weight_Timestamp", "Weight", "Calories", "Protein_g", "Workout_Day", "Creatine", "Magnesium_Glycinate", "Nitric_Oxide", "L_Carnitine", "Notes"])
     df = pd.DataFrame()
 
 # TDEE CALCULATION (Auto-Adaptive Engine w/ Untracked Day Protection)
@@ -193,7 +219,7 @@ tab_dashboard, tab_log, tab_sim, tab_data, tab_settings = st.tabs(["📊 Dashboa
 # --- TAB: LOG ENTRY ---
 with tab_log:
     st.header("Daily Tracking")
-    log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition"])
+    log_tab1, log_tab2 = st.tabs(["🌅 Morning Weigh-In", "🌙 Evening Nutrition & Supplements"])
     
     with log_tab1:
         with st.form("morning_form", clear_on_submit=True):
@@ -223,7 +249,7 @@ with tab_log:
                     df_all.at[idx, 'Weight_Timestamp'] = time_str
                     st.toast("Morning weigh-in updated!", icon="✅")
                 else:
-                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": time_str, "Weight": weight_input, "Calories": 0, "Protein_g": 0, "Workout_Day": False, "Notes": ""}])
+                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": time_str, "Weight": weight_input, "Calories": 0, "Protein_g": 0, "Workout_Day": False, "Creatine": 0.0, "Magnesium_Glycinate": 0.0, "Nitric_Oxide": 0.0, "L_Carnitine": 0.0, "Notes": ""}])
                     df_all = pd.concat([df_all, new_entry], ignore_index=True)
                     st.toast("Morning weigh-in saved!", icon="🎉")
                 
@@ -236,17 +262,27 @@ with tab_log:
     with log_tab2:
         with st.form("evening_form", clear_on_submit=True):
             entry_date_e = st.date_input("Date", value=date.today(), key="e_date")
-            untracked_day = st.checkbox("I didn't track today (Auto-guestimate using tomorrow's weight)")
+            untracked_day = st.checkbox("I didn't track food today (Auto-guestimate using tomorrow's weight)")
             
+            st.markdown("##### 🍽️ Macros")
             col_e1, col_e2 = st.columns(2)
             with col_e1:
                 calorie_input = st.number_input("Calories", min_value=0, step=1, disabled=untracked_day)
-                protein_input = st.number_input("Protein (g)", min_value=0, step=1, disabled=untracked_day)
             with col_e2:
-                workout_day = st.checkbox("Did you workout today?")
-                notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
+                protein_input = st.number_input("Protein (g)", min_value=0, step=1, disabled=untracked_day)
+                
+            st.markdown("##### 💊 Daily Stack (Pre-filled from Settings)")
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+            with col_s1: s_creatine = st.number_input("Creatine (g)", value=float(settings['def_creatine']), min_value=0.0, step=1.0)
+            with col_s2: s_mag = st.number_input("Magnesium (mg)", value=float(settings['def_magnesium']), min_value=0.0, step=50.0)
+            with col_s3: s_no = st.number_input("Nitric Ox. (mg)", value=float(settings['def_nitric']), min_value=0.0, step=100.0)
+            with col_s4: s_carn = st.number_input("L-Carnitine (mg)", value=float(settings['def_carnitine']), min_value=0.0, step=100.0)
+                
+            st.markdown("##### 📝 Details")
+            workout_day = st.checkbox("Did you workout today?")
+            notes_input = st.text_area("Notes", placeholder="How did you feel?", height=68)
             
-            if st.form_submit_button("Save Evening Nutrition", use_container_width=True):
+            if st.form_submit_button("Save Evening Log", use_container_width=True):
                 final_cals = -1 if untracked_day else calorie_input
                 final_pro = 0 if untracked_day else protein_input
                 
@@ -257,12 +293,16 @@ with tab_log:
                     df_all.at[idx, 'Calories'] = final_cals
                     df_all.at[idx, 'Protein_g'] = final_pro
                     df_all.at[idx, 'Workout_Day'] = workout_day
+                    df_all.at[idx, 'Creatine'] = s_creatine
+                    df_all.at[idx, 'Magnesium_Glycinate'] = s_mag
+                    df_all.at[idx, 'Nitric_Oxide'] = s_no
+                    df_all.at[idx, 'L_Carnitine'] = s_carn
                     df_all.at[idx, 'Notes'] = notes_input
-                    st.toast("Evening nutrition updated!", icon="✅")
+                    st.toast("Evening log updated!", icon="✅")
                 else:
-                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": final_cals, "Protein_g": final_pro, "Workout_Day": workout_day, "Notes": notes_input}])
+                    new_entry = pd.DataFrame([{"Username": st.session_state.username, "Date": entry_date_str, "Weight_Timestamp": "", "Weight": 0.0, "Calories": final_cals, "Protein_g": final_pro, "Workout_Day": workout_day, "Creatine": s_creatine, "Magnesium_Glycinate": s_mag, "Nitric_Oxide": s_no, "L_Carnitine": s_carn, "Notes": notes_input}])
                     df_all = pd.concat([df_all, new_entry], ignore_index=True)
-                    st.toast("Evening nutrition saved!", icon="🎉")
+                    st.toast("Evening log saved!", icon="🎉")
                 
                 df_upload = df_all.copy()
                 df_upload['Date'] = pd.to_datetime(df_upload['Date']).dt.strftime('%Y-%m-%d')
@@ -282,6 +322,28 @@ with tab_dashboard:
         "Trust the process and show up."
     ]
     st.markdown(f"<p style='text-align:center; font-style:italic; color:#A0A0A0; font-size:1.1rem;'>\"{quotes[date.today().day % len(quotes)]}\"</p>", unsafe_allow_html=True)
+
+    if not df.empty:
+        current_weight = df.iloc[-1]['Weight']
+        
+        # --- WATER PRESCRIPTION ALGORITHM ---
+        # Base: 0.75 oz per lb of bodyweight to continually flush sodium/bloating
+        # Modifiers: +20 oz for Creatine synthesis (if dose > 0), +16 oz for Workout sweat loss
+        if UNIT == "lb":
+            base_water = current_weight * 0.75
+            if df.iloc[-1].get('Creatine', 0.0) > 0: base_water += 20
+            if df.iloc[-1].get('Workout_Day', False): base_water += 16
+            water_liters = base_water * 0.0295735
+            water_display = f"{base_water:.0f} oz (approx {water_liters:.1f} L)"
+        else:
+            base_water = current_weight * 50 # 50 ml per kg
+            if df.iloc[-1].get('Creatine', 0.0) > 0: base_water += 600
+            if df.iloc[-1].get('Workout_Day', False): base_water += 500
+            water_liters = base_water / 1000
+            water_display = f"{water_liters:.1f} Liters"
+            
+        st.markdown(f"<div class='water-box'>💧 <b>Daily Hydration Prescription:</b> {water_display}<br><span style='font-size:0.9rem; opacity:0.9;'><i>Calculated to aggressively flush systemic bloating and support your current stack.</i></span></div>", unsafe_allow_html=True)
+        # ------------------------------------
 
     if diet_break_triggered:
         st.warning(f"⚠️ **Diet Break Protocol Engaged:** Your weight hasn't dropped in 7 days. Your calorie goal has been temporarily raised to maintenance ({int(est_tdee)} kcal) to reset your metabolism.")
@@ -492,27 +554,42 @@ with tab_sim:
             sim_cals = st.slider("If I eat this many calories a day...", min_value=1200, max_value=3500, value=CALORIE_GOAL, step=50)
             sim_days = st.slider("For this many days...", min_value=7, max_value=90, value=30, step=7)
             
-            cheat_day = st.checkbox("Include 1 Cheat Day (3500 kcal buffer)")
+            col_sim1, col_sim2 = st.columns(2)
+            with col_sim1:
+                cheat_day = st.checkbox("Include 1 Cheat Day (3500 kcal buffer)")
+            with col_sim2:
+                sim_carnitine = st.checkbox("I will be using L-Carnitine")
+                sim_creatine = st.checkbox("I will be using Creatine")
             
+            # Algorithmic Supplement Integration
             daily_deficit = est_tdee - sim_cals
+            if sim_carnitine: 
+                daily_deficit += 40 # Slight metabolic fat oxidation boost
+                
             total_deficit = daily_deficit * sim_days
             
             if cheat_day:
-                # Subtract the damage done by eating 3500 cals instead of the slider goal for one day
                 total_deficit -= (3500 - sim_cals)
             
             sim_weight_lost = total_deficit / CALS_PER_UNIT
             sim_final_weight = df.iloc[-1]['Weight'] - sim_weight_lost
             
+            # Creatine adds approx 2.5 lbs (1.1kg) of intracellular water retention to the physical scale weight
+            if sim_creatine:
+                if UNIT == "lb": sim_final_weight += 2.5
+                else: sim_final_weight += 1.1
+            
             if sim_weight_lost > 0:
-                st.success(f"In {sim_days} days, you would lose **{sim_weight_lost:.1f} {UNIT}**, weighing exactly **{sim_final_weight:.1f} {UNIT}**!")
+                st.success(f"In {sim_days} days, you would burn **{sim_weight_lost:.1f} {UNIT}** of tissue, weighing exactly **{sim_final_weight:.1f} {UNIT}** on the scale!")
             else:
-                st.warning(f"At {sim_cals} calories, you would gain **{abs(sim_weight_lost):.1f} {UNIT}**, weighing **{sim_final_weight:.1f} {UNIT}**.")
+                st.warning(f"At {sim_cals} calories, you would gain **{abs(sim_weight_lost):.1f} {UNIT}**, weighing **{sim_final_weight:.1f} {UNIT}** on the scale.")
+                
+            if sim_creatine:
+                st.info("🔬 *Note: Your projected scale weight is mathematically higher than your fat loss because the algorithm automatically factored in water retention from Creatine.*")
                 
             # Body Fat Simulator Extension
             if BF_PCT > 0:
                 lean_mass = current_weight * (1 - (BF_PCT / 100))
-                # Assuming 25% of weight lost is lean mass, 75% fat
                 weight_dropped = current_weight - sim_final_weight
                 new_lean = lean_mass - (weight_dropped * 0.25) if weight_dropped > 0 else lean_mass
                 new_bf = ((sim_final_weight - new_lean) / sim_final_weight) * 100
@@ -548,7 +625,6 @@ with tab_data:
     st.header("Manage Cloud Data")
     
     if not df.empty:
-        # Pull raw df_all to preserve the explicit -1 values in the database view
         df_edit = df_all[df_all['Username'].astype(str).str.strip().str.lower() == st.session_state.username.lower()].copy()
         df_edit['Date'] = pd.to_datetime(df_edit['Date']).dt.strftime('%Y-%m-%d')
         df_edit = df_edit.sort_values(by='Date', ascending=False).reset_index(drop=True)
@@ -625,13 +701,35 @@ with tab_settings:
         new_unit = st.selectbox("Preferred Unit", ["lb", "kg"], index=0 if UNIT == "lb" else 1)
         new_manual_tdee = st.number_input("Manual TDEE Baseline", value=int(MANUAL_TDEE), step=50)
         
+    st.subheader("💊 Default Supplement Dosages")
+    st.write("Set your standard scoops here. They will automatically pre-fill in your evening log so you don't have to type them every day.")
+    col_sd1, col_sd2, col_sd3, col_sd4 = st.columns(4)
+    with col_sd1: new_def_creatine = st.number_input("Creatine (g)", value=settings["def_creatine"], step=1.0)
+    with col_sd2: new_def_mag = st.number_input("Magnesium (mg)", value=settings["def_magnesium"], step=50.0)
+    with col_sd3: new_def_no = st.number_input("Nitric Oxide (mg)", value=settings["def_nitric"], step=100.0)
+    with col_sd4: new_def_carn = st.number_input("L-Carnitine (mg)", value=settings["def_carnitine"], step=100.0)
+        
     new_bf = st.number_input("Body Fat % (Leave at 0 to ignore)", value=BF_PCT, format="%.1f")
     new_dark_mode = st.toggle("Enable Dark Mode", value=DARK_MODE)
         
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
         s_df_others = s_df[s_df['Username'].astype(str).str.strip().str.lower() != st.session_state.username.lower()]
-        new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": new_manual_tdee}])
+        new_s_df = pd.DataFrame([{
+            "Username": st.session_state.username, 
+            "calorie_goal": new_cal, 
+            "goal_weight": new_weight, 
+            "dark_mode": new_dark_mode, 
+            "unit": new_unit, 
+            "age": new_age, 
+            "height": new_height, 
+            "bf_pct": new_bf, 
+            "ai_tdee": new_manual_tdee,
+            "def_creatine": new_def_creatine,
+            "def_magnesium": new_def_mag,
+            "def_nitric": new_def_no,
+            "def_carnitine": new_def_carn
+        }])
         updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
         
         with st.spinner("Saving preferences to Cloud..."):
