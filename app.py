@@ -9,9 +9,8 @@ import time
 # --- 1. UI & STATE CONFIGURATION ---
 st.set_page_config(page_title="Health Tracker", layout="wide")
 
-# Hardcode identity so it instantly links to your existing cloud data
-if "username" not in st.session_state:
-    st.session_state.username = "Yani"
+# Forcefully overwrite any old "logged out" browser cache and lock the profile to you
+st.session_state.username = "Yani"
 
 if "confetti_fired" not in st.session_state:
     st.session_state.confetti_fired = False
@@ -26,7 +25,8 @@ st.sidebar.write(f"👤 **Single-User Mode:** {st.session_state.username}")
 def load_settings(username):
     try:
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-        user_s = s_df[s_df['Username'] == username]
+        # Ensure it matches "Yani" even if there are accidental spaces or lowercase letters in the database
+        user_s = s_df[s_df['Username'].astype(str).str.strip().str.lower() == username.lower()]
         if not user_s.empty:
             unit_val = user_s.iloc[0].get('unit', 'lb')
             if pd.isna(unit_val) or str(unit_val).lower() == 'nan' or str(unit_val).strip() == '':
@@ -127,7 +127,8 @@ try:
     else:
         df_all['Notes'] = ""
             
-    df = df_all[df_all['Username'] == st.session_state.username].copy()
+    # Use case-insensitive matching just in case the database says 'yani' instead of 'Yani'
+    df = df_all[df_all['Username'].astype(str).str.strip().str.lower() == st.session_state.username.lower()].copy()
     if not df.empty:
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values(by='Date').reset_index(drop=True)
@@ -215,7 +216,7 @@ with tab_log:
             
             if st.form_submit_button("Save Morning Weigh-In", use_container_width=True):
                 entry_date_str = str(entry_date_m)
-                mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
+                mask = (df_all['Username'].astype(str).str.strip().str.lower() == st.session_state.username.lower()) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
                 if not df_all[mask].empty:
                     idx = df_all[mask].index[0]
                     df_all.at[idx, 'Weight'] = weight_input
@@ -250,7 +251,7 @@ with tab_log:
                 final_pro = 0 if untracked_day else protein_input
                 
                 entry_date_str = str(entry_date_e)
-                mask = (df_all['Username'] == st.session_state.username) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
+                mask = (df_all['Username'].astype(str).str.strip().str.lower() == st.session_state.username.lower()) & (pd.to_datetime(df_all['Date']).dt.strftime('%Y-%m-%d') == entry_date_str)
                 if not df_all[mask].empty:
                     idx = df_all[mask].index[0]
                     df_all.at[idx, 'Calories'] = final_cals
@@ -548,7 +549,7 @@ with tab_data:
     
     if not df.empty:
         # Pull raw df_all to preserve the explicit -1 values in the database view
-        df_edit = df_all[df_all['Username'] == st.session_state.username].copy()
+        df_edit = df_all[df_all['Username'].astype(str).str.strip().str.lower() == st.session_state.username.lower()].copy()
         df_edit['Date'] = pd.to_datetime(df_edit['Date']).dt.strftime('%Y-%m-%d')
         df_edit = df_edit.sort_values(by='Date', ascending=False).reset_index(drop=True)
         
@@ -580,7 +581,7 @@ with tab_data:
                     df_edit_new = df_edit.drop(old_chunk_indices)
                     df_edit_new = pd.concat([df_edit_new, edited_chunk]).sort_values(by='Date', ascending=False)
                     
-                    df_all_others = df_all[df_all['Username'] != st.session_state.username]
+                    df_all_others = df_all[df_all['Username'].astype(str).str.strip().str.lower() != st.session_state.username.lower()]
                     new_df_all = pd.concat([df_all_others, df_edit_new])
                     new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
                     conn.update(worksheet="Data", data=new_df_all)
@@ -597,7 +598,7 @@ with tab_data:
                     df_edit_new = df_edit.drop(old_chunk_indices)
                     df_edit_new = pd.concat([df_edit_new, edited_chunk]).sort_values(by='Date', ascending=False)
                     
-                    df_all_others = df_all[df_all['Username'] != st.session_state.username]
+                    df_all_others = df_all[df_all['Username'].astype(str).str.strip().str.lower() != st.session_state.username.lower()]
                     new_df_all = pd.concat([df_all_others, df_edit_new])
                     new_df_all['Date'] = pd.to_datetime(new_df_all['Date']).dt.strftime('%Y-%m-%d')
                     conn.update(worksheet="Data", data=new_df_all)
@@ -629,7 +630,7 @@ with tab_settings:
         
     if st.button("Save Settings to Cloud", type="primary", use_container_width=True):
         s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-        s_df_others = s_df[s_df['Username'] != st.session_state.username]
+        s_df_others = s_df[s_df['Username'].astype(str).str.strip().str.lower() != st.session_state.username.lower()]
         new_s_df = pd.DataFrame([{"Username": st.session_state.username, "calorie_goal": new_cal, "goal_weight": new_weight, "dark_mode": new_dark_mode, "unit": new_unit, "age": new_age, "height": new_height, "bf_pct": new_bf, "ai_tdee": new_manual_tdee}])
         updated_s_df = pd.concat([s_df_others, new_s_df], ignore_index=True)
         
