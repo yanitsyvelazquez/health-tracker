@@ -4,96 +4,24 @@ from datetime import date, datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_gsheets import GSheetsConnection
-import hashlib
 import time
-
-# --- HELPER FUNCTION: PASSWORD ENCRYPTION ---
-def make_hash(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
 
 # --- 1. UI & STATE CONFIGURATION ---
 st.set_page_config(page_title="Health Tracker", layout="wide")
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = ""
+# Hardcode identity so it instantly links to your existing cloud data
+if "username" not in st.session_state:
+    st.session_state.username = "Yani"
 
-# Initialize confetti explicitly outside the login block 
 if "confetti_fired" not in st.session_state:
     st.session_state.confetti_fired = False
 
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- 2. SECURE LOGIN & REGISTRATION SYSTEM ---
-if not st.session_state.logged_in:
-    st.title("🔒 Health Dashboard")
-    
-    try:
-        users_df = conn.read(worksheet="Users", ttl=0).dropna(how="all")
-    except Exception:
-        users_df = pd.DataFrame(columns=["Username", "Password"])
-        
-    tab_login, tab_register = st.tabs(["Login", "Create Account"])
-    
-    with tab_login:
-        st.write("Welcome back! Please log in.")
-        user_login = st.text_input("Username", key="log_user")
-        pwd_login = st.text_input("Password", type="password", key="log_pwd")
-        
-        if st.button("Login", type="primary"):
-            if user_login in users_df['Username'].values:
-                stored_hash = users_df[users_df['Username'] == user_login]['Password'].iloc[0]
-                if stored_hash == make_hash(pwd_login):
-                    st.session_state.logged_in = True
-                    st.session_state.username = user_login
-                    st.rerun()
-                else:
-                    st.error("Incorrect password.")
-            else:
-                st.error("Username not found. Please create an account.")
-                
-    with tab_register:
-        st.write("Join the dashboard and track your progress.")
-        new_user = st.text_input("New Username", key="reg_user")
-        new_pwd = st.text_input("New Password", type="password", key="reg_pwd")
-        new_unit = st.selectbox("Preferred Unit", ["lb", "kg"])
-        
-        if st.button("Create Account"):
-            if new_user in users_df['Username'].values:
-                st.error("Username already taken! Please choose another.")
-            elif new_user == "" or new_pwd == "":
-                st.warning("Please enter a username and password.")
-            else:
-                new_user_df = pd.DataFrame([{"Username": new_user, "Password": make_hash(new_pwd)}])
-                with st.spinner("Creating account..."):
-                    users_df = pd.concat([users_df, new_user_df], ignore_index=True)
-                    conn.update(worksheet="Users", data=users_df)
-                
-                try:
-                    s_df = conn.read(worksheet="Settings", ttl=0).dropna(how="all")
-                except Exception:
-                    s_df = pd.DataFrame(columns=["Username", "calorie_goal", "goal_weight", "dark_mode", "unit", "age", "height", "bf_pct", "manual_tdee"])
-                    
-                default_goal = 150.0 if new_unit == "lb" else 70.0
-                new_s_df = pd.DataFrame([{"Username": new_user, "calorie_goal": 1900, "goal_weight": default_goal, "dark_mode": False, "unit": new_unit, "age": 25, "height": 65.0, "bf_pct": 0.0, "manual_tdee": 2000}])
-                
-                with st.spinner("Provisioning cloud profile..."):
-                    s_df = pd.concat([s_df, new_s_df], ignore_index=True)
-                    conn.update(worksheet="Settings", data=s_df)
-                
-                st.success("Account successfully created! You can now log in.")
-    st.stop() 
+st.sidebar.write(f"👤 **Single-User Mode:** {st.session_state.username}")
 
-# --- (APP CONTINUES BELOW IF LOGGED IN) ---
-
-st.sidebar.write(f"👤 Logged in as: **{st.session_state.username}**")
-if st.sidebar.button("Logout"):
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.rerun()
-
-# Load Settings specific to logged-in user
+# Load Settings
 @st.cache_data(ttl=5)
 def load_settings(username):
     try:
@@ -133,7 +61,7 @@ PROTEIN_MULTIPLIER = 0.8 if UNIT == "lb" else 1.76
 HEIGHT_UNIT = "inches" if UNIT == "lb" else "cm"
 WEIGHT_UNIT = "lbs" if UNIT == "lb" else "kg"
 
-# --- UI COLOR & THEME INJECTION (Includes Mobile Optimization) ---
+# --- UI COLOR & THEME INJECTION ---
 if DARK_MODE:
     st.markdown("""
         <style>
@@ -175,7 +103,7 @@ else:
     """, unsafe_allow_html=True)
     theme_template = "plotly_white"
 
-# --- 3. LOAD CLOUD DATA (FILTERED BY USER) ---
+# --- 2. LOAD CLOUD DATA ---
 try:
     df_all = conn.read(worksheet="Data", ttl=0).dropna(how="all")
     if 'Weight_lb' in df_all.columns: df_all.rename(columns={'Weight_lb': 'Weight'}, inplace=True)
